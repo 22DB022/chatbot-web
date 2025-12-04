@@ -1,0 +1,522 @@
+
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎓 RAG学習アプリ</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 24px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-around;
+            background: #f8f9fa;
+            padding: 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+
+        .main-content {
+            display: flex;
+            height: 600px;
+        }
+
+        .sidebar {
+            width: 300px;
+            background: #f8f9fa;
+            border-right: 1px solid #e0e0e0;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .sidebar h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .pdf-list {
+            list-style: none;
+        }
+
+        .pdf-item {
+            background: white;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+            font-size: 13px;
+        }
+
+        .pdf-name {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .pdf-info {
+            color: #666;
+            font-size: 11px;
+        }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #ffffff;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-header {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+
+        .message-content {
+            padding: 16px;
+            border-radius: 12px;
+            line-height: 1.6;
+        }
+
+        .user-message .message-content {
+            background: #667eea;
+            color: white;
+            margin-left: 80px;
+        }
+
+        .bot-message .message-content {
+            background: #f0f0f0;
+            color: #333;
+            margin-right: 80px;
+        }
+
+        .sources {
+            margin-top: 15px;
+            padding: 12px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .sources-title {
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+
+        .source-item {
+            padding: 8px;
+            margin: 5px 0;
+            background: #f8f9fa;
+            border-radius: 6px;
+            font-size: 12px;
+            border-left: 3px solid #667eea;
+        }
+
+        .source-file {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .source-similarity {
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .input-container {
+            padding: 20px;
+            background: #f8f9fa;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+        }
+
+        #questionInput {
+            flex: 1;
+            padding: 14px 18px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+
+        #questionInput:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        button {
+            padding: 14px 28px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .reset-btn {
+            background: #ff6b6b;
+            padding: 10px 20px;
+            font-size: 13px;
+        }
+
+        .reset-btn:hover {
+            background: #ff5252;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            background: #ff6b6b;
+            color: white;
+            padding: 15px;
+            margin: 10px 20px;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .welcome-message {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .welcome-message h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎓 マルチメディア検定 RAG学習アプリ</h1>
+            <p id="dbType">データベース接続確認中...</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="stat-item">
+                <div class="stat-value" id="pdfCount">-</div>
+                <div class="stat-label">登録PDF数</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="totalPages">-</div>
+                <div class="stat-label">総ページ数</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="totalChunks">-</div>
+                <div class="stat-label">検索可能チャンク</div>
+            </div>
+        </div>
+
+        <div id="errorMessage" class="error-message"></div>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <h3>📚 登録済みPDF</h3>
+                <ul id="pdfList" class="pdf-list">
+                    <li style="color: #999; font-size: 13px;">読み込み中...</li>
+                </ul>
+            </div>
+
+            <div class="chat-area">
+                <div id="chatContainer" class="chat-container">
+                    <div class="welcome-message">
+                        <h2>ようこそ！</h2>
+                        <p>マルチメディア検定の学習をサポートします。<br>何でも質問してください！</p>
+                    </div>
+                </div>
+
+                <div class="input-container">
+                    <input 
+                        type="text" 
+                        id="questionInput" 
+                        placeholder="質問を入力してください（例：マルチメディアとは何ですか？）"
+                        onkeypress="handleKeyPress(event)"
+                    >
+                    <button id="sendButton" onclick="sendQuestion()">送信</button>
+                    <button class="reset-btn" onclick="resetConversation()">🔄 リセット</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const SESSION_ID = 'session_' + Date.now();
+
+        // 初期化
+        async function initialize() {
+            try {
+                // ヘルスチェック
+                const healthResponse = await fetch('/api/health');
+                const healthData = await healthResponse.json();
+                
+                document.getElementById('dbType').textContent = 
+                    `データベース: ${healthData.database} | 状態: ${healthData.status}`;
+
+                // 初期データ取得
+                const initResponse = await fetch('/api/init');
+                const initData = await initResponse.json();
+
+                // 統計情報更新
+                document.getElementById('pdfCount').textContent = initData.stats.pdf_count;
+                document.getElementById('totalPages').textContent = initData.stats.total_pages;
+                document.getElementById('totalChunks').textContent = initData.stats.total_chunks;
+
+                // PDF一覧更新
+                updatePdfList(initData.pdf_list);
+
+                console.log('✅ 初期化完了');
+            } catch (error) {
+                console.error('❌ 初期化エラー:', error);
+                showError('サーバーに接続できません。web_app.pyが起動しているか確認してください。');
+            }
+        }
+
+        // PDF一覧更新
+        function updatePdfList(pdfList) {
+            const listElement = document.getElementById('pdfList');
+            
+            if (!pdfList || pdfList.length === 0) {
+                listElement.innerHTML = '<li style="color: #999;">PDF未登録</li>';
+                return;
+            }
+
+            listElement.innerHTML = pdfList.map(pdf => `
+                <li class="pdf-item">
+                    <div class="pdf-name">📄 ${pdf.filename}</div>
+                    <div class="pdf-info">
+                        ${pdf.page_count}ページ | ${pdf.total_chunks}チャンク<br>
+                        追加日: ${new Date(pdf.added_date).toLocaleDateString('ja-JP')}
+                    </div>
+                </li>
+            `).join('');
+        }
+
+        // エラー表示
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // メッセージ追加
+        function addMessage(text, isUser, sources = []) {
+            const chatContainer = document.getElementById('chatContainer');
+            
+            // ウェルカムメッセージを削除
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+            
+            messageDiv.innerHTML = `
+                <div class="message-header">${isUser ? '👤 あなた' : '🤖 AIアシスタント'}</div>
+                <div class="message-content">${text.replace(/\n/g, '<br>')}</div>
+            `;
+
+            if (!isUser && sources.length > 0) {
+                const sourcesHtml = `
+                    <div class="sources">
+                        <div class="sources-title">📖 参照した資料</div>
+                        ${sources.map((s, i) => `
+                            <div class="source-item">
+                                <span class="source-file">${s.filename}</span> - 
+                                ページ${s.page} 
+                                <span class="source-similarity">(類似度: ${s.similarity})</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                `;
+                messageDiv.querySelector('.message-content').insertAdjacentHTML('beforeend', sourcesHtml);
+            }
+
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        // 質問送信
+        async function sendQuestion() {
+            const input = document.getElementById('questionInput');
+            const sendButton = document.getElementById('sendButton');
+            const question = input.value.trim();
+
+            if (!question) {
+                showError('質問を入力してください');
+                return;
+            }
+
+            // UI更新
+            addMessage(question, true);
+            input.value = '';
+            sendButton.disabled = true;
+            sendButton.innerHTML = '<span class="loading"></span>';
+
+            try {
+                const response = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        question: question,
+                        session_id: SESSION_ID
+                    })
+                });
+
+                if (!response.ok) throw new Error(`HTTPエラー: ${response.status}`);
+
+                const data = await response.json();
+
+                if (data.no_data) {
+                    addMessage(data.answer, false);
+                } else {
+                    addMessage(data.answer, false, data.sources || []);
+                }
+
+            } catch (error) {
+                console.error('エラー:', error);
+                showError(`エラーが発生しました: ${error.message}`);
+                addMessage('エラーが発生しました。もう一度お試しください。', false);
+            } finally {
+                sendButton.disabled = false;
+                sendButton.textContent = '送信';
+            }
+        }
+
+        // 会話リセット
+        async function resetConversation() {
+            if (!confirm('会話履歴をリセットしますか？')) return;
+
+            try {
+                await fetch('/api/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: SESSION_ID })
+                });
+
+                document.getElementById('chatContainer').innerHTML = `
+                    <div class="welcome-message">
+                        <h2>会話をリセットしました</h2>
+                        <p>新しい質問をどうぞ！</p>
+                    </div>
+                `;
+            } catch (error) {
+                showError('リセットに失敗しました');
+            }
+        }
+
+        // Enterキーで送信
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendQuestion();
+            }
+        }
+
+        // ページロード時に初期化
+        window.addEventListener('load', initialize);
+    </script>
+</body>
+</html>
