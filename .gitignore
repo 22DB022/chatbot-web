@@ -15,3 +15,4 @@ venv/
 
 # その他
 .DS_Store
+ngrok.exe
