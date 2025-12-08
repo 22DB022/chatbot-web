@@ -16,3 +16,5 @@ venv/
 # その他
 .DS_Store
 ngrok.exe
+pdfs/
+check_db.py
