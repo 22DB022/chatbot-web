@@ -450,6 +450,14 @@ def reset_conversation():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+try:
+    print("🚀 RAG学習アプリ起動中...")
+    initialize()
+    print("✅ 初期化完了")
+except Exception as e:
+    print(f"❌ 初期化エラー: {e}")
+    import traceback
+    traceback.print_exc()
 
 if __name__ == '__main__':
     try:
