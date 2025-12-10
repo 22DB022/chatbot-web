@@ -2,7 +2,7 @@
 マルチメディア学習アプリ（Web版）
 既存のRAGロジックを使用したFlask API
 """
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from openai import OpenAI
@@ -363,7 +363,7 @@ def initialize():
 @app.route('/')
 def index():
     """メインページ"""
-    return render_template('index.html')
+    return send_from_directory('templates', 'index.html')
 
 
 @app.route('/api/health', methods=['GET'])
