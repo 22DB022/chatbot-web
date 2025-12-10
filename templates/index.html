@@ -1,82 +1,131 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🎓 RAG学習アプリ</title>
-    <!-- assetsフォルダを参照 -->
-    <link rel="stylesheet" href="/assets/css/style.css">
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🎓 マルチメディア検定 RAG学習アプリ</h1>
-            <p id="dbType">データベース接続確認中...</p>
-        </div>
+/* ============================================
+   クイックアクションボタン
+============================================ */
 
-        <div class="status-bar">
-            <div class="stat-item">
-                <div class="stat-value" id="pdfCount">-</div>
-                <div class="stat-label">登録PDF数</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="totalPages">-</div>
-                <div class="stat-label">総ページ数</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-value" id="totalChunks">-</div>
-                <div class="stat-label">検索可能チャンク</div>
-            </div>
-        </div>
+.quick-actions {
+    display: flex;
+    gap: 10px;
+    padding: 15px 20px 10px 20px;
+    background: #f8f9fa;
+    border-top: 1px solid #e0e0e0;
+    flex-wrap: wrap;
+}
 
-        <div id="errorMessage" class="error-message"></div>
+.action-btn {
+    flex: 1;
+    min-width: 120px;
+    padding: 12px 16px;
+    border: 2px solid transparent;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
 
-        <div class="main-content">
-            <div class="sidebar">
-                <!-- PDFアップロード -->
-                <div class="upload-section">
-                    <button onclick="document.getElementById('pdfFileInput').click()" class="upload-button">
-                        📤 PDFを追加
-                    </button>
-                    <input type="file" id="pdfFileInput" accept=".pdf" style="display: none;" onchange="handleFileSelect(event)">
-                    <div id="uploadProgress" class="upload-progress" style="display: none;">
-                        <div class="progress-bar">
-                            <div id="progressBarFill" class="progress-fill"></div>
-                        </div>
-                        <div id="uploadStatus" class="upload-status">アップロード中...</div>
-                    </div>
-                </div>
+.action-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
 
-                <h3>📚 登録済みPDF</h3>
-                <ul id="pdfList" class="pdf-list">
-                    <li style="color: #999; font-size: 13px;">読み込み中...</li>
-                </ul>
-            </div>
+.action-btn:active {
+    transform: translateY(0);
+}
 
-            <div class="chat-area">
-                <div id="chatContainer" class="chat-container">
-                    <div class="welcome-message">
-                        <h2>ようこそ！</h2>
-                        <p>マルチメディア検定の学習をサポートします。</p>
-                        <p>専門用語の解説、問題の出題、過去問の解説、何をしますか？</p>
-                    </div>
-                </div>
+.action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+}
 
-                <div class="input-container">
-                    <input 
-                        type="text" 
-                        id="questionInput" 
-                        placeholder="質問を入力してください（例：マルチメディアとは何ですか？）"
-                        onkeypress="handleKeyPress(event)"
-                    >
-                    <button id="sendButton" onclick="sendQuestion()">送信</button>
-                    <button class="reset-btn" onclick="resetConversation()">🔄 リセット</button>
-                </div>
-            </div>
-        </div>
-    </div>
+/* 問題を出す（緑） */
+.quiz-btn {
+    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+    color: white;
+}
 
-    <!-- assetsフォルダを参照 -->
-    <script src="/assets/js/app.js"></script>
-</body>
-</html>
+.quiz-btn:hover {
+    background: linear-gradient(135deg, #218838 0%, #1ba87e 100%);
+    border-color: #28a745;
+}
+
+/* 専門用語を解説（青） */
+.term-btn {
+    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+    color: white;
+}
+
+.term-btn:hover {
+    background: linear-gradient(135deg, #0069d9 0%, #004085 100%);
+    border-color: #007bff;
+}
+
+/* 過去問を解説（紫） */
+.past-btn {
+    background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%);
+    color: white;
+}
+
+.past-btn:hover {
+    background: linear-gradient(135deg, #5e37a6 0%, #4c2a85 100%);
+    border-color: #6f42c1;
+}
+
+/* ============================================
+   スマートフォン対応（クイックアクション）
+============================================ */
+
+@media screen and (max-width: 768px) {
+    .quick-actions {
+        padding: 10px;
+        gap: 8px;
+    }
+    
+    .action-btn {
+        flex: 1 1 calc(33.333% - 8px);
+        min-width: 0;
+        padding: 10px 8px;
+        font-size: 12px;
+        border-radius: 8px;
+    }
+    
+    /* 3列レイアウト */
+    .action-btn:nth-child(n+4) {
+        margin-top: 0;
+    }
+}
+
+/* 極小画面（2列レイアウト） */
+@media screen and (max-width: 480px) {
+    .quick-actions {
+        gap: 6px;
+    }
+    
+    .action-btn {
+        flex: 1 1 calc(50% - 6px);
+        font-size: 11px;
+        padding: 8px 6px;
+    }
+    
+    /* 最後のボタンを2列目に */
+    .action-btn:nth-child(3) {
+        flex: 1 1 100%;
+    }
+}
+
+/* 横向き対応 */
+@media screen and (max-width: 768px) and (orientation: landscape) {
+    .quick-actions {
+        padding: 8px 10px;
+    }
+    
+    .action-btn {
+        padding: 8px 12px;
+        font-size: 11px;
+    }
+}

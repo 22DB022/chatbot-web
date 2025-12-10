@@ -348,3 +348,37 @@ function handleKeyPress(event) {
 
 // ページロード時に初期化
 window.addEventListener('load', initialize);
+// クイックアクション機能
+function sendQuickAction(actionType) {
+    const input = document.getElementById('questionInput');
+    const sendButton = document.getElementById('sendButton');
+    
+    // ボタンが無効化されている場合は処理しない
+    if (sendButton.disabled) {
+        return;
+    }
+    
+    let message = '';
+    
+    switch(actionType) {
+        case 'quiz':
+            message = '問題を出してください';
+            break;
+        case 'term':
+            message = '重要な専門用語を1つ選んで解説してください';
+            break;
+        case 'past':
+            message = '過去問レベルの問題を1問出してください';
+            break;
+        default:
+            return;
+    }
+    
+    // 入力欄に表示（視覚的フィードバック）
+    input.value = message;
+    
+    // 少し待ってから送信（ユーザーが見えるように）
+    setTimeout(() => {
+        sendQuestion();
+    }, 300);
+}
