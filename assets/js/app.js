@@ -27,6 +27,9 @@ function saveChatHistory() {
         };
         localStorage.setItem(`chat_history_${SESSION_ID}`, JSON.stringify(history));
         console.log('💾 会話履歴を保存:', chatMessages.length + '件');
+        
+        // ★ 会話履歴リストを更新（追加）
+        updateChatHistoryList();
     } catch (error) {
         console.error('会話履歴の保存エラー:', error);
         if (error.name === 'QuotaExceededError') {
@@ -93,6 +96,9 @@ async function initialize() {
         document.getElementById('totalChunks').textContent = initData.stats.total_chunks;
 
         updatePdfList(initData.pdf_list);
+        
+        // ★ 会話履歴を更新（追加）
+        updateChatHistoryList();
 
         console.log('✅ 初期化完了');
     } catch (error) {
@@ -276,6 +282,9 @@ async function resetConversation() {
                 </div>
             </div>
         `;
+        
+        // ★ 会話履歴リストを更新（追加）
+        updateChatHistoryList();
 
         console.log('🔄 新しいチャットを開始しました');
     } catch (error) {
@@ -406,3 +415,202 @@ function toggleSidebar() {
 
 // ページロード時に初期化
 window.addEventListener('load', initialize);
+// ============================================
+// 会話履歴管理
+// ============================================
+
+// 全ての会話履歴を取得
+function getAllChatHistories() {
+    const histories = [];
+    
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        
+        // chat_history_ で始まるキーのみ
+        if (key && key.startsWith('chat_history_')) {
+            try {
+                const data = JSON.parse(localStorage.getItem(key));
+                const sessionId = key.replace('chat_history_', '');
+                
+                // メッセージがある場合のみ追加
+                if (data.messages && data.messages.length > 0) {
+                    // 最初のユーザーメッセージをタイトルに
+                    const firstUserMessage = data.messages.find(m => m.isUser);
+                    const title = firstUserMessage 
+                        ? firstUserMessage.text.substring(0, 30) + (firstUserMessage.text.length > 30 ? '...' : '')
+                        : '無題の会話';
+                    
+                    histories.push({
+                        sessionId: sessionId,
+                        title: title,
+                        lastUpdated: data.lastUpdated || new Date().toISOString(),
+                        messageCount: data.messages.length
+                    });
+                }
+            } catch (error) {
+                console.error('履歴の読み込みエラー:', key, error);
+            }
+        }
+    }
+    
+    // 最終更新日時でソート（新しい順）
+    histories.sort((a, b) => new Date(b.lastUpdated) - new Date(a.lastUpdated));
+    
+    return histories;
+}
+
+// 会話履歴リストを更新
+function updateChatHistoryList() {
+    const historyList = document.getElementById('chatHistory');
+    const histories = getAllChatHistories();
+    
+    if (histories.length === 0) {
+        historyList.innerHTML = '<div class="chat-history-empty">会話履歴はありません</div>';
+        return;
+    }
+    
+    historyList.innerHTML = histories.map(history => {
+        const date = new Date(history.lastUpdated);
+        const dateStr = formatDate(date);
+        const isActive = history.sessionId === SESSION_ID;
+        
+        return `
+            <div class="chat-history-item ${isActive ? 'active' : ''}" 
+                 onclick="loadChatHistory('${history.sessionId}')"
+                 data-session-id="${history.sessionId}">
+                <span class="chat-history-icon">💬</span>
+                <div class="chat-history-content">
+                    <div class="chat-history-title">${escapeHtml(history.title)}</div>
+                    <div class="chat-history-date">${dateStr}</div>
+                </div>
+                <button class="chat-history-delete" 
+                        onclick="deleteChatHistory(event, '${history.sessionId}')"
+                        title="削除">
+                    🗑️
+                </button>
+            </div>
+        `;
+    }).join('');
+}
+
+// 日付フォーマット
+function formatDate(date) {
+    const now = new Date();
+    const diff = now - date;
+    
+    // 今日
+    if (diff < 24 * 60 * 60 * 1000 && now.getDate() === date.getDate()) {
+        return date.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    }
+    
+    // 昨日
+    const yesterday = new Date(now);
+    yesterday.setDate(yesterday.getDate() - 1);
+    if (yesterday.getDate() === date.getDate()) {
+        return '昨日';
+    }
+    
+    // それ以前
+    return date.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+}
+
+// HTMLエスケープ
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 特定の会話履歴を読み込む
+function loadChatHistory(sessionId) {
+    if (sessionId === SESSION_ID) return; // 既に表示中
+    
+    try {
+        const savedHistory = localStorage.getItem(`chat_history_${sessionId}`);
+        if (!savedHistory) {
+            showError('会話履歴が見つかりません');
+            return;
+        }
+        
+        const history = JSON.parse(savedHistory);
+        
+        // セッションIDを更新
+        SESSION_ID = sessionId;
+        localStorage.setItem('chat_session_id', sessionId);
+        
+        // メッセージを読み込み
+        chatMessages = history.messages || [];
+        
+        // 画面をクリア
+        const chatContainer = document.getElementById('chatContainer');
+        chatContainer.innerHTML = '';
+        
+        // メッセージを復元
+        restoreMessages();
+        
+        // 会話履歴リストを更新（ハイライトを更新）
+        updateChatHistoryList();
+        
+        console.log('✅ 会話履歴を読み込みました:', sessionId);
+    } catch (error) {
+        console.error('会話履歴の読み込みエラー:', error);
+        showError('会話履歴の読み込みに失敗しました');
+    }
+}
+
+// 会話履歴を削除
+function deleteChatHistory(event, sessionId) {
+    event.stopPropagation(); // 親要素のクリックイベントを防ぐ
+    
+    if (!confirm('この会話を削除しますか？\n（この操作は取り消せません）')) {
+        return;
+    }
+    
+    try {
+        // LocalStorageから削除
+        localStorage.removeItem(`chat_history_${sessionId}`);
+        
+        // 現在表示中の会話を削除した場合
+        if (sessionId === SESSION_ID) {
+            // 新しいセッションを開始
+            localStorage.removeItem('chat_session_id');
+            SESSION_ID = getOrCreateSessionId();
+            chatMessages = [];
+            
+            // ウェルカム画面を表示
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.innerHTML = `
+                <div class="welcome-screen">
+                    <div class="welcome-icon">🎓</div>
+                    <h1 class="welcome-title">マルチメディア検定<br>学習アシスタント</h1>
+                    
+                    <div class="quick-actions-grid">
+                        <button class="quick-action-card" onclick="sendQuickAction('quiz')">
+                            <div class="card-icon">📝</div>
+                            <div class="card-title">問題を出す</div>
+                            <div class="card-desc">理解度をチェック</div>
+                        </button>
+                        <button class="quick-action-card" onclick="sendQuickAction('term')">
+                            <div class="card-icon">📖</div>
+                            <div class="card-title">専門用語解説</div>
+                            <div class="card-desc">重要な用語を学ぶ</div>
+                        </button>
+                        <button class="quick-action-card" onclick="sendQuickAction('past')">
+                            <div class="card-icon">📚</div>
+                            <div class="card-title">過去問に挑戦</div>
+                            <div class="card-desc">試験レベルの問題</div>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // 会話履歴リストを更新
+        updateChatHistoryList();
+        
+        console.log('🗑️ 会話履歴を削除しました:', sessionId);
+    } catch (error) {
+        console.error('会話履歴の削除エラー:', error);
+        showError('会話履歴の削除に失敗しました');
+    }
+}

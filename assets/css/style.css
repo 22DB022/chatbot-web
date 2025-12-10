@@ -1,3 +1,7 @@
+/* ============================================
+   ChatGPT風デザイン - グローバル設定
+============================================ */
+
 * {
     margin: 0;
     padding: 0;
@@ -29,6 +33,9 @@ body {
     overflow: hidden;
 }
 
+/* ============================================
+   サイドバー
+============================================ */
 
 .sidebar {
     width: 260px;
@@ -223,6 +230,7 @@ body {
     text-align: center;
 }
 
+/* サイドバー切り替えボタン */
 .sidebar-toggle {
     display: none;
     position: fixed;
@@ -238,7 +246,119 @@ body {
     cursor: pointer;
     box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
+/* ============================================
+   会話履歴
+============================================ */
 
+.chat-history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.chat-history-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    background-color: rgba(255,255,255,0.05);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+}
+
+.chat-history-item:hover {
+    background-color: rgba(255,255,255,0.1);
+}
+
+.chat-history-item.active {
+    background-color: var(--accent-color);
+}
+
+.chat-history-item.active .chat-history-title {
+    color: white;
+    font-weight: 600;
+}
+
+.chat-history-icon {
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.chat-history-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.chat-history-title {
+    font-size: 13px;
+    color: var(--sidebar-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+}
+
+.chat-history-date {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.chat-history-delete {
+    display: none;
+    width: 28px;
+    height: 28px;
+    background-color: rgba(255,255,255,0.1);
+    border: none;
+    border-radius: 4px;
+    color: var(--sidebar-text);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s;
+}
+
+.chat-history-item:hover .chat-history-delete {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.chat-history-delete:hover {
+    background-color: #ef4444;
+    color: white;
+}
+
+.chat-history-empty {
+    padding: 20px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* スクロールバー（会話履歴用） */
+.chat-history-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.chat-history-list::-webkit-scrollbar-track {
+    background: rgba(255,255,255,0.05);
+}
+
+.chat-history-list::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+    border-radius: 3px;
+}
+
+.chat-history-list::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.3);
+}
+
+/* ============================================
+   メインコンテンツ
+============================================ */
 
 .main-container {
     flex: 1;
@@ -261,6 +381,9 @@ body {
     padding: 24px;
 }
 
+/* ============================================
+   ウェルカムスクリーン
+============================================ */
 
 .welcome-screen {
     display: flex;
@@ -326,6 +449,10 @@ body {
     font-size: 12px;
     color: var(--text-secondary);
 }
+
+/* ============================================
+   メッセージ
+============================================ */
 
 .message {
     display: flex;
