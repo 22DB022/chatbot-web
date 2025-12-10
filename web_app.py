@@ -539,10 +539,7 @@ def initialize():
 # APIエンドポイント
 # ============================================
 
-@app.route('/')
-def index():
-    """メインページ"""
-    return send_from_directory('templates', 'index.html')
+
 
 
 @app.route('/api/health', methods=['GET'])
@@ -573,6 +570,10 @@ def get_init_data():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+@app.route('/')
+def index():
+    """メインページ"""
+    return render_template('index.html')
 
 
 @app.route('/api/query', methods=['POST'])
