@@ -9,6 +9,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 
 # VS Code
 .vscode/
@@ -16,5 +17,10 @@ venv/
 # その他
 .DS_Store
 ngrok.exe
-pdfs/
-check_db.py
+
+# データベース（サイズが大きい場合や動的生成される場合のみ除外）
+# rag_study_data.db
+
+# 注意：以下は削除しました（アプリに必要な場合）
+# pdfs/ - PDFファイルがアプリに必要なら含める
+# check_db.py - Pythonスクリプトは通常コミットする
