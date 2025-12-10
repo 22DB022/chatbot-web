@@ -11,6 +11,6 @@ pymysql==1.1.0
 cryptography==41.0.7
 
 # PDFやデータベース処理（必要に応じて）
-# PyPDF2==3.0.1
-# pdfplumber==0.10.3
-# SQLAlchemy==2.0.23
+PyPDF2==3.0.1
+pdfplumber==0.10.3
+SQLAlchemy==2.0.23
