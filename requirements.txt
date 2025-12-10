@@ -7,6 +7,8 @@ anthropic==0.18.1
 langchain==0.1.9
 gunicorn>=21.0.0
 Flask-Limiter==3.5.0
+pymysql==1.1.0
+cryptography==41.0.7
 
 # PDFやデータベース処理（必要に応じて）
 # PyPDF2==3.0.1
