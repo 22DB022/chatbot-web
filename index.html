@@ -285,11 +285,11 @@
             color: #667eea;
             margin-bottom: 15px;
         }
-    /* ============================================
-   スマートフォン対応
+   /* ============================================
+   スマートフォン対応（会話優先）
 ============================================ */
 
-/* タブレット以下 (1024px以下) */
+/* タブレット以下 */
 @media screen and (max-width: 1024px) {
     .container {
         flex-direction: column;
@@ -298,7 +298,7 @@
     .sidebar {
         width: 100%;
         height: auto;
-        max-height: 200px;
+        max-height: 150px;
         overflow-y: auto;
         border-right: none;
         border-bottom: 1px solid #dee2e6;
@@ -310,157 +310,148 @@
     }
 }
 
-/* スマートフォン (768px以下) */
+/* スマートフォン（会話を最大化） */
 @media screen and (max-width: 768px) {
     body {
         margin: 0;
         padding: 0;
     }
     
+    /* ヘッダーをコンパクトに */
     .header {
-        padding: 15px 10px;
+        padding: 10px;
     }
     
     .header h1 {
-        font-size: 1.3em;
+        font-size: 1.1em;
         margin: 0;
     }
     
     .db-info {
-        font-size: 0.75em;
+        font-size: 0.7em;
     }
     
+    /* 統計情報を最小化 */
     .stats {
-        flex-direction: column;
-        gap: 10px;
-        padding: 10px;
+        display: none; /* スマホでは統計情報も非表示 */
     }
     
-    .stat-item {
-        width: 100%;
-        padding: 10px;
-    }
-    
+    /* 登録済みPDFを完全非表示 */
     .sidebar {
-        max-height: 150px;
-        font-size: 0.9em;
+        display: none !important;
     }
     
-    .sidebar h3 {
-        font-size: 1em;
-        padding: 10px;
-    }
-    
-    .pdf-list {
-        padding: 10px;
-    }
-    
-    .pdf-item {
-        padding: 10px;
-        font-size: 0.85em;
-    }
-    
-    .pdf-icon {
-        font-size: 1.2em;
+    /* チャット画面を最大化 */
+    .main-content {
+        height: calc(100vh - 60px); /* ヘッダー分のみ */
     }
     
     .chat-container {
-        height: calc(100vh - 350px);
-        min-height: 300px;
+        height: calc(100% - 70px); /* 入力欄分を引く */
+        padding: 10px;
     }
     
+    /* メッセージを見やすく */
     .message {
-        max-width: 90%;
-        padding: 12px;
-        font-size: 0.95em;
+        max-width: 85%;
+        padding: 12px 15px;
+        font-size: 1em;
+        line-height: 1.6;
+        margin-bottom: 12px;
     }
     
+    .user-message {
+        background: #007bff;
+        color: white;
+    }
+    
+    .bot-message {
+        background: #f1f3f5;
+        color: #212529;
+    }
+    
+    /* 入力欄を使いやすく */
     .input-container {
         padding: 10px;
         gap: 8px;
-        flex-wrap: wrap;
+        background: white;
+        border-top: 1px solid #dee2e6;
     }
     
     #user-input {
-        font-size: 16px; /* iOS zoom防止（16px未満だと自動ズームされる） */
+        font-size: 16px; /* iOS zoom防止 */
         padding: 12px;
         flex: 1;
-        min-width: 200px;
+        border: 1px solid #ced4da;
+        border-radius: 8px;
     }
     
-    .send-button, .reset-button {
-        padding: 12px 16px;
-        font-size: 0.9em;
+    .send-button {
+        padding: 12px 20px;
+        font-size: 1em;
         min-width: 70px;
-        min-height: 44px; /* iOSのタッチ推奨サイズ */
+        min-height: 44px;
+        background: #007bff;
+        border-radius: 8px;
+    }
+    
+    .reset-button {
+        padding: 10px 16px;
+        font-size: 0.9em;
+        min-height: 44px;
+        border-radius: 8px;
+    }
+    
+    /* ローディング表示 */
+    .loading {
+        font-size: 0.9em;
     }
 }
 
-/* 極小画面 (375px以下 - iPhone SE など) */
+/* 極小画面（iPhone SE など） */
 @media screen and (max-width: 375px) {
     .header h1 {
-        font-size: 1.1em;
-    }
-    
-    .stats {
-        font-size: 0.85em;
-    }
-    
-    .stat-item {
-        padding: 8px;
-    }
-    
-    .sidebar {
-        max-height: 120px;
-    }
-    
-    .pdf-item {
-        font-size: 0.8em;
+        font-size: 1em;
     }
     
     .message {
-        font-size: 0.9em;
-        padding: 10px;
+        font-size: 0.95em;
+        padding: 10px 12px;
     }
     
-    .send-button, .reset-button {
-        padding: 10px 12px;
-        font-size: 0.85em;
+    .send-button {
+        padding: 10px 16px;
         min-width: 60px;
+    }
+    
+    .reset-button {
+        padding: 8px 12px;
+        font-size: 0.85em;
     }
 }
 
 /* 横向き対応 */
 @media screen and (max-width: 768px) and (orientation: landscape) {
     .header {
-        padding: 10px;
+        padding: 8px 10px;
     }
     
     .header h1 {
-        font-size: 1.1em;
+        font-size: 0.95em;
     }
     
-    .stats {
-        flex-direction: row;
-        flex-wrap: wrap;
-        gap: 5px;
-        padding: 5px;
-    }
-    
-    .stat-item {
-        flex: 1;
-        min-width: 120px;
-        padding: 8px;
-        font-size: 0.8em;
-    }
-    
-    .sidebar {
-        max-height: 100px;
-        font-size: 0.85em;
+    .main-content {
+        height: calc(100vh - 50px);
     }
     
     .chat-container {
-        height: calc(100vh - 250px);
+        height: calc(100% - 60px);
+        padding: 8px;
+    }
+    
+    .message {
+        font-size: 0.9em;
+        margin-bottom: 8px;
     }
     
     .input-container {
@@ -468,18 +459,22 @@
     }
 }
 
-/* タッチデバイス全般の調整 */
+/* タッチデバイス全般 */
 @media (hover: none) and (pointer: coarse) {
-    /* タッチ操作用のボタンサイズ確保 */
+    /* タッチ操作用のサイズ確保 */
     button {
         min-height: 44px;
-        min-width: 44px;
     }
     
     /* スクロール慣性 */
-    .chat-container,
-    .pdf-list {
+    .chat-container {
         -webkit-overflow-scrolling: touch;
+        scroll-behavior: smooth;
+    }
+    
+    /* タップ時のハイライトを調整 */
+    * {
+        -webkit-tap-highlight-color: rgba(0, 123, 255, 0.1);
     }
 }
     </style>
