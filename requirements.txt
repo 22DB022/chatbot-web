@@ -5,4 +5,5 @@ python-dotenv>=1.0.0
 numpy>=1.24.0,<2.0.0
 pdfplumber>=0.10.0
 PyPDF2>=3.0.0
-gunicorn>=21.0.0
+gunicorn>=21.0.0pip install Flask-Limiter
+Flask-Limiter

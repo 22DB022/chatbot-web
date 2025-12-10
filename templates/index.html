@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎓 RAG学習アプリ</title>
+    <!-- assetsフォルダを参照 -->
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎓 マルチメディア検定 RAG学習アプリ</h1>
+            <p id="dbType">データベース接続確認中...</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="stat-item">
+                <div class="stat-value" id="pdfCount">-</div>
+                <div class="stat-label">登録PDF数</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="totalPages">-</div>
+                <div class="stat-label">総ページ数</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-value" id="totalChunks">-</div>
+                <div class="stat-label">検索可能チャンク</div>
+            </div>
+        </div>
+
+        <div id="errorMessage" class="error-message"></div>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <!-- PDFアップロード -->
+                <div class="upload-section">
+                    <button onclick="document.getElementById('pdfFileInput').click()" class="upload-button">
+                        📤 PDFを追加
+                    </button>
+                    <input type="file" id="pdfFileInput" accept=".pdf" style="display: none;" onchange="handleFileSelect(event)">
+                    <div id="uploadProgress" class="upload-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div id="progressBarFill" class="progress-fill"></div>
+                        </div>
+                        <div id="uploadStatus" class="upload-status">アップロード中...</div>
+                    </div>
+                </div>
+
+                <h3>📚 登録済みPDF</h3>
+                <ul id="pdfList" class="pdf-list">
+                    <li style="color: #999; font-size: 13px;">読み込み中...</li>
+                </ul>
+            </div>
+
+            <div class="chat-area">
+                <div id="chatContainer" class="chat-container">
+                    <div class="welcome-message">
+                        <h2>ようこそ！</h2>
+                        <p>マルチメディア検定の学習をサポートします。</p>
+                        <p>気になることを質問してください！</p>
+                    </div>
+                </div>
+
+                <div class="input-container">
+                    <input 
+                        type="text" 
+                        id="questionInput" 
+                        placeholder="質問を入力してください（例：マルチメディアとは何ですか？）"
+                        onkeypress="handleKeyPress(event)"
+                    >
+                    <button id="sendButton" onclick="sendQuestion()">送信</button>
+                    <button class="reset-btn" onclick="resetConversation()">🔄 リセット</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- assetsフォルダを参照 -->
+    <script src="/assets/js/app.js"></script>
+</body>
+</html>

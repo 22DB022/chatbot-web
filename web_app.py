@@ -2,15 +2,20 @@
 マルチメディア学習アプリ（Web版）
 既存のRAGロジックを使用したFlask API
 """
-
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify, render_template
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from openai import OpenAI
-from dotenv import load_dotenv
 import os
+import pymysql
 import json
 import numpy as np
+from datetime import datetime
+from dotenv import load_dotenv
 import sqlite3
+
+# 環境変数読み込み
+load_dotenv()
 
 # PyMySQL (MySQL用)
 try:
@@ -19,10 +24,23 @@ try:
 except ImportError:
     MYSQL_AVAILABLE = False
 
-load_dotenv()
+# Flaskアプリ初期化
+app = Flask(__name__, 
+            template_folder='templates',
+            static_folder='assets',
+            static_url_path='/assets')
 
-app = Flask(__name__)
-CORS(app)
+# レート制限
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["200 per day", "50 per hour"]
+)
+
+# グローバル変数
+db = None
+client = None
+conversation_history = {}
 
 
 class RAGDatabase:
@@ -189,11 +207,6 @@ class RAGDatabase:
             conn.close()
 
 
-# グローバル変数
-db = None
-client = None
-conversation_history = {}
-
 BASE_SYSTEM_PROMPT = """# 前提条件
 - あなたはマルチメディア検定ベーシック対策の教育AIアシスタントです
 - ユーザーは検定合格を目指す学習者です
@@ -220,8 +233,6 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 - ユーザーの回答を待つ
 - 回答後、正誤判定と解説を行う
 - 理解度に応じて追加問題を提案
-- ユーザーが間違えた場合、ヒントを提供する
-- 答えは絶対に教えない
 
 ## パターン3: ヒントを求められた場合
 - 段階的にヒントを提供
@@ -289,42 +300,6 @@ C) ftp://example.com
 他の分野も学習する？それとも、もう少しセキュリティについて深掘りする？
 ```
 
-## 入力例4: わからない場合
-```
-ユーザー: わからない
-```
-
-## 出力例4: ヒント提供
-```
-大丈夫、ヒントを出すね！
-
-ヒント1：
-URLの最初の部分（プロトコル）に注目してみて。
-「s」が付いているかどうかがポイントだよ。
-
-もう一度考えてみて！
-まだわからなかったら、もっとヒントを出すよ。
-```
-
-## 入力例5: 最初の接触
-```
-ユーザー: こんにちは
-```
-
-## 出力例5: 初回対応
-```
-こんにちは！👋
-
-マルチメディア検定の学習をサポートするよ！
-
-今日は何を学習したい？
-・専門用語の説明を聞きたい
-・過去問風の問題を解きたい
-・特定の分野を勉強したい
-
-遠慮なく聞いてね！
-```
-
 # 禁止事項
 - 資料外の情報を創作する
 - 答えを直接教える前にユーザーが考える機会を奪う（問題演習時のみ）
@@ -351,15 +326,12 @@ def initialize():
     client = OpenAI(api_key=api_key)
     
     # データベース初期化
-    # 🆕 明示的なフラグを最優先
     use_sqlite_flag = os.getenv('USE_SQLITE', 'false').lower()
     
     if use_sqlite_flag == 'true':
-        # SQLite強制モード
         use_mysql = False
         print("✅ SQLiteモード（USE_SQLITE=true）")
     elif MYSQL_AVAILABLE and os.getenv('DB_NAME'):
-        # MySQL接続を試みる
         try:
             test_config = {
                 'host': os.getenv('DB_HOST', 'localhost'),
@@ -377,7 +349,6 @@ def initialize():
             print("⚠️ SQLiteにフォールバックします")
             use_mysql = False
     else:
-        # デフォルトはSQLite
         use_mysql = False
         print("✅ SQLiteモード（デフォルト）")
     
@@ -385,10 +356,14 @@ def initialize():
     print(f"✅ RAGデータベース初期化完了 ({'MySQL' if use_mysql else 'SQLite'})")
 
 
+# ============================================
+# APIエンドポイント
+# ============================================
+
 @app.route('/')
 def index():
-    """index.htmlを返す"""
-    return send_file('index.html')
+    """メインページ"""
+    return render_template('index.html')
 
 
 @app.route('/api/health', methods=['GET'])
@@ -421,17 +396,8 @@ def get_init_data():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/pdf-list', methods=['GET'])
-def get_pdf_list():
-    """PDF一覧取得"""
-    try:
-        pdf_list = db.get_pdf_list()
-        return jsonify({'pdf_list': pdf_list})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 @app.route('/api/query', methods=['POST'])
+@limiter.limit("10 per minute")
 def query():
     """質問API - RAGロジック"""
     try:
@@ -442,12 +408,10 @@ def query():
         if not question:
             return jsonify({'error': '質問が空です'}), 400
         
-        # 統計情報確認
         stats = db.get_stats()
         if stats['pdf_count'] == 0:
             return jsonify({
-                'answer': 'まだPDF資料が登録されていません。\n\n'
-                         "'pdf_to_db_rag.py' を実行してPDFを追加してください📚",
+                'answer': 'まだPDF資料が登録されていません。',
                 'sources': [],
                 'no_data': True
             })
@@ -461,7 +425,6 @@ def query():
         messages = conversation_history[session_id]
         
         # 1. 質問をベクトル化
-        print(f"🔍 質問をベクトル化: {question}")
         query_response = client.embeddings.create(
             model="text-embedding-3-small",
             input=question
@@ -469,29 +432,26 @@ def query():
         query_embedding = query_response.data[0].embedding
         
         # 2. ベクトル検索
-        print(f"🔍 ベクトル検索実行...")
         relevant_chunks = db.vector_search(query_embedding, top_k=5)
         
         if not relevant_chunks:
             return jsonify({
-                'answer': '関連する情報が資料に見つかりませんでした。\n別の質問をしてみてください。',
+                'answer': '関連する情報が資料に見つかりませんでした。',
                 'sources': []
             })
         
         # 3. コンテキスト構築
-        context = "# 関連する学習資料（類似度順）:\n\n"
+        context = "# 関連する学習資料:\n\n"
         sources = []
         
         for i, chunk in enumerate(relevant_chunks, 1):
             context += f"【資料{i}: {chunk['filename']} ページ{chunk['page']}】\n"
-            context += f"類似度: {chunk['similarity']:.3f}\n"
             context += f"{chunk['text']}\n\n"
             
             sources.append({
                 'filename': chunk['filename'],
                 'page': chunk['page'],
-                'similarity': round(chunk['similarity'], 3),
-                'text': chunk['text'][:100] + '...' if len(chunk['text']) > 100 else chunk['text']
+                'similarity': round(chunk['similarity'], 3)
             })
         
         # 4. AIに送信
@@ -499,7 +459,6 @@ def query():
         
         messages.append({"role": "user", "content": full_message})
         
-        print(f"🤖 AI応答生成中...")
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=messages,
@@ -509,17 +468,15 @@ def query():
         
         assistant_message = response.choices[0].message.content
         
-        # 会話履歴を更新（コンテキストなしの質問で記録）
+        # 会話履歴を更新
         messages[-1] = {"role": "user", "content": question}
         messages.append({"role": "assistant", "content": assistant_message})
         
-        # 履歴が長くなりすぎたら古いものを削除（システムプロンプト + 最新10往復）
+        # 履歴管理
         if len(messages) > 21:
             messages = [messages[0]] + messages[-20:]
         
         conversation_history[session_id] = messages
-        
-        print(f"✅ 応答完了")
         
         return jsonify({
             'answer': assistant_message,
@@ -527,7 +484,6 @@ def query():
         })
         
     except Exception as e:
-        print(f"❌ エラー: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -547,6 +503,210 @@ def reset_conversation():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/upload-pdf', methods=['POST'])
+def upload_pdf():
+    """PDFアップロードと登録"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'error': 'ファイルが選択されていません'}), 400
+        
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({'error': 'ファイルが選択されていません'}), 400
+        
+        if not file.filename.lower().endswith('.pdf'):
+            return jsonify({'error': 'PDFファイルを選択してください'}), 400
+        
+        file.seek(0, 2)
+        file_size = file.tell()
+        file.seek(0)
+        
+        if file_size > 50 * 1024 * 1024:
+            return jsonify({'error': 'ファイルサイズが大きすぎます（最大50MB）'}), 400
+        
+        print(f"📤 PDFアップロード開始: {file.filename}")
+        
+        import tempfile
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+            file.save(temp_file.name)
+            temp_path = temp_file.name
+        
+        try:
+            result = process_pdf_file(temp_path, file.filename)
+            
+            return jsonify({
+                'success': True,
+                'message': f'"{file.filename}" を登録しました',
+                'stats': result
+            })
+            
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'処理エラー: {str(e)}'}), 500
+
+
+def process_pdf_file(pdf_path, filename):
+    """PDFファイルを処理してデータベースに登録"""
+    import pdfplumber
+    
+    print(f"📄 PDF処理開始: {filename}")
+    
+    pages_text = []
+    total_chars = 0
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages, 1):
+            text = page.extract_text()
+            if text:
+                text = text.strip()
+                pages_text.append({'page': i, 'text': text})
+                total_chars += len(text)
+    
+    if not pages_text:
+        raise Exception("PDFからテキストを抽出できませんでした")
+    
+    print(f"✅ 全{len(pages_text)}ページ抽出完了")
+    
+    # 既存データをチェック
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if db.use_mysql:
+            cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = %s", (filename,))
+        else:
+            cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = ?", (filename,))
+        
+        exists = cursor.fetchone()[0] > 0
+        
+        if exists:
+            if db.use_mysql:
+                cursor.execute("DELETE FROM pdf_metadata WHERE filename = %s", (filename,))
+                cursor.execute("DELETE FROM pdf_contents WHERE filename = %s", (filename,))
+            else:
+                cursor.execute("DELETE FROM pdf_metadata WHERE filename = ?", (filename,))
+                cursor.execute("DELETE FROM pdf_contents WHERE filename = ?", (filename,))
+            conn.commit()
+            print(f"⚠️ 既存データを削除: {filename}")
+        
+    finally:
+        cursor.close()
+    
+    # チャンク化とベクトル化
+    all_chunks = []
+    
+    for page_data in pages_text:
+        chunks = chunk_text(page_data['text'])
+        
+        for chunk in chunks:
+            embedding = create_embedding(chunk)
+            all_chunks.append({
+                'page': page_data['page'],
+                'text': chunk,
+                'embedding': embedding
+            })
+    
+    print(f"✅ 全{len(all_chunks)}チャンク処理完了")
+    
+    # データベースに保存
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if db.use_mysql:
+            cursor.execute("""
+                INSERT INTO pdf_metadata 
+                (filename, page_count, total_chars, total_chunks, added_date)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now()))
+        else:
+            cursor.execute("""
+                INSERT INTO pdf_metadata 
+                (filename, page_count, total_chars, total_chunks, added_date)
+                VALUES (?, ?, ?, ?, ?)
+            """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now().isoformat()))
+        
+        for chunk in all_chunks:
+            embedding_json = json.dumps(chunk['embedding'])
+            
+            if db.use_mysql:
+                cursor.execute("""
+                    INSERT INTO pdf_contents 
+                    (filename, page_number, chunk_text, embedding, added_date)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (filename, chunk['page'], chunk['text'], embedding_json, datetime.now()))
+            else:
+                cursor.execute("""
+                    INSERT INTO pdf_contents 
+                    (filename, page_number, chunk_text, embedding, added_date)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (filename, chunk['page'], chunk['text'], embedding_json, datetime.now().isoformat()))
+        
+        conn.commit()
+        print(f"✅ データベース登録完了: {filename}")
+        
+        return {
+            'filename': filename,
+            'page_count': len(pages_text),
+            'total_chars': total_chars,
+            'total_chunks': len(all_chunks)
+        }
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def chunk_text(text, max_chunk_size=1000, overlap=200):
+    """テキストをチャンクに分割"""
+    chunks = []
+    start = 0
+    
+    while start < len(text):
+        end = start + max_chunk_size
+        chunk = text[start:end]
+        
+        if end < len(text):
+            last_period = chunk.rfind('。')
+            last_newline = chunk.rfind('\n')
+            last_space = chunk.rfind(' ')
+            
+            split_point = max(last_period, last_newline, last_space)
+            if split_point > max_chunk_size * 0.5:
+                chunk = chunk[:split_point + 1]
+                end = start + split_point + 1
+        
+        if chunk.strip():
+            chunks.append(chunk.strip())
+        
+        start = end - overlap
+    
+    return chunks
+
+
+def create_embedding(text):
+    """テキストをベクトル化"""
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+    return response.data[0].embedding
+
+
+# ============================================
+# アプリケーション起動
+# ============================================
 try:
     print("🚀 RAG学習アプリ起動中...")
     initialize()
@@ -557,18 +717,8 @@ except Exception as e:
     traceback.print_exc()
 
 if __name__ == '__main__':
-    try:
-        print("🚀 RAG学習アプリ起動中...")
-        initialize()
-        print("✅ 初期化完了")
-        
-        # 本番環境用の設定
-        port = int(os.environ.get('PORT', 5000))
-        debug_mode = os.environ.get('FLASK_ENV') != 'production'
-        
-        print(f"📱 ポート {port} でアクセス可能")
-        app.run(host='0.0.0.0', port=port, debug=debug_mode)
-    except Exception as e:
-        print(f"❌ 起動エラー: {e}")
-        import traceback
-        traceback.print_exc()
+    port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('FLASK_ENV') != 'production'
+    
+    print(f"📱 ポート {port} でアクセス可能")
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
