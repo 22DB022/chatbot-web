@@ -29,7 +29,6 @@ function saveChatHistory() {
         console.log('💾 会話履歴を保存:', chatMessages.length + '件');
     } catch (error) {
         console.error('会話履歴の保存エラー:', error);
-        
         if (error.name === 'QuotaExceededError') {
             trimChatHistory();
         }
@@ -55,14 +54,14 @@ function loadChatHistory() {
 // 保存されたメッセージを画面に復元
 function restoreMessages() {
     const chatContainer = document.getElementById('chatContainer');
-    const welcomeMsg = chatContainer.querySelector('.welcome-message');
-    if (welcomeMsg) welcomeMsg.remove();
+    const welcomeScreen = chatContainer.querySelector('.welcome-screen');
+    if (welcomeScreen) welcomeScreen.remove();
     
     chatMessages.forEach(msg => {
-        addMessageToUI(msg.text, msg.isUser, msg.sources || []);
+        addMessageToUI(msg.text, msg.isUser);
     });
     
-    chatContainer.scrollTop = chatContainer.scrollHeight;
+    scrollToBottom();
 }
 
 // 古いメッセージを削除
@@ -84,7 +83,7 @@ async function initialize() {
         const healthData = await healthResponse.json();
         
         document.getElementById('dbType').textContent = 
-            `データベース: ${healthData.database} | 状態: ${healthData.status}`;
+            `${healthData.database} | ${healthData.status}`;
 
         const initResponse = await fetch('/api/init');
         const initData = await initResponse.json();
@@ -107,7 +106,7 @@ function updatePdfList(pdfList) {
     const listElement = document.getElementById('pdfList');
     
     if (!pdfList || pdfList.length === 0) {
-        listElement.innerHTML = '<li style="color: #999;">PDF未登録</li>';
+        listElement.innerHTML = '<li class="pdf-loading">PDF未登録</li>';
         return;
     }
 
@@ -115,8 +114,7 @@ function updatePdfList(pdfList) {
         <li class="pdf-item">
             <div class="pdf-name">📄 ${pdf.filename}</div>
             <div class="pdf-info">
-                ${pdf.page_count}ページ | ${pdf.total_chunks}チャンク<br>
-                追加日: ${new Date(pdf.added_date).toLocaleDateString('ja-JP')}
+                ${pdf.page_count}ページ | ${pdf.total_chunks}チャンク
             </div>
         </li>
     `).join('');
@@ -133,36 +131,44 @@ function showError(message) {
 }
 
 // メッセージをUIに追加
-function addMessageToUI(text, isUser, sources = []) {
+function addMessageToUI(text, isUser) {
     const chatContainer = document.getElementById('chatContainer');
+    const welcomeScreen = chatContainer.querySelector('.welcome-screen');
+    if (welcomeScreen) welcomeScreen.remove();
     
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
     
-    messageDiv.innerHTML = `
-        <div class="message-header">${isUser ? '👤 あなた' : '🤖 AIアシスタント'}</div>
-        <div class="message-content">${text.replace(/\n/g, '<br>')}</div>
-    `;
-
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+    avatar.textContent = isUser ? '👤' : '🤖';
+    
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    content.innerHTML = text.replace(/\n/g, '<br>');
+    
+    messageDiv.appendChild(avatar);
+    messageDiv.appendChild(content);
+    
     chatContainer.appendChild(messageDiv);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
+    scrollToBottom();
+}
+
+// スクロールを下に
+function scrollToBottom() {
+    const chatWrapper = document.querySelector('.chat-wrapper');
+    chatWrapper.scrollTop = chatWrapper.scrollHeight;
 }
 
 // メッセージ追加
-function addMessage(text, isUser, sources = []) {
-    const chatContainer = document.getElementById('chatContainer');
-    const welcomeMsg = chatContainer.querySelector('.welcome-message');
-    if (welcomeMsg) welcomeMsg.remove();
-
+function addMessage(text, isUser) {
     const message = {
         text: text,
         isUser: isUser,
-        sources: sources,
         timestamp: new Date().toISOString()
     };
     chatMessages.push(message);
-
-    addMessageToUI(text, isUser, sources);
+    addMessageToUI(text, isUser);
     saveChatHistory();
 }
 
@@ -173,14 +179,31 @@ async function sendQuestion() {
     const question = input.value.trim();
 
     if (!question) {
-        showError('質問を入力してください');
+        showError('メッセージを入力してください');
         return;
     }
 
     addMessage(question, true);
     input.value = '';
+    input.style.height = 'auto';
     sendButton.disabled = true;
-    sendButton.innerHTML = '<span class="loading"></span>';
+    
+    // ローディング表示
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'message bot-message';
+    loadingDiv.id = 'loading-message';
+    loadingDiv.innerHTML = `
+        <div class="message-avatar">🤖</div>
+        <div class="message-content">
+            <div class="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    `;
+    document.getElementById('chatContainer').appendChild(loadingDiv);
+    scrollToBottom();
 
     try {
         const response = await fetch('/api/query', {
@@ -195,26 +218,27 @@ async function sendQuestion() {
         if (!response.ok) throw new Error(`HTTPエラー: ${response.status}`);
 
         const data = await response.json();
-
-        if (data.no_data) {
-            addMessage(data.answer, false);
-        } else {
-            addMessage(data.answer, false, data.sources || []);
-        }
+        
+        // ローディング削除
+        const loading = document.getElementById('loading-message');
+        if (loading) loading.remove();
+        
+        addMessage(data.answer, false);
 
     } catch (error) {
         console.error('エラー:', error);
+        const loading = document.getElementById('loading-message');
+        if (loading) loading.remove();
         showError(`エラーが発生しました: ${error.message}`);
         addMessage('エラーが発生しました。もう一度お試しください。', false);
     } finally {
         sendButton.disabled = false;
-        sendButton.textContent = '送信';
     }
 }
 
 // 会話リセット
 async function resetConversation() {
-    if (!confirm('会話履歴をリセットしますか？\n（保存された履歴も削除されます）')) return;
+    if (!confirm('新しいチャットを開始しますか？\n（現在の会話は保存されます）')) return;
 
     try {
         await fetch('/api/reset', {
@@ -229,16 +253,70 @@ async function resetConversation() {
         SESSION_ID = getOrCreateSessionId();
 
         document.getElementById('chatContainer').innerHTML = `
-            <div class="welcome-message">
-                <h2>ようこそ！</h2>
-                <p>マルチメディア検定の学習をサポートします。</p>
-                <p>気になることを質問してください！</p>
+            <div class="welcome-screen">
+                <div class="welcome-icon">🎓</div>
+                <h1 class="welcome-title">マルチメディア検定<br>学習アシスタント</h1>
+                
+                <div class="quick-actions-grid">
+                    <button class="quick-action-card" onclick="sendQuickAction('quiz')">
+                        <div class="card-icon">📝</div>
+                        <div class="card-title">問題を出す</div>
+                        <div class="card-desc">理解度をチェック</div>
+                    </button>
+                    <button class="quick-action-card" onclick="sendQuickAction('term')">
+                        <div class="card-icon">📖</div>
+                        <div class="card-title">専門用語解説</div>
+                        <div class="card-desc">重要な用語を学ぶ</div>
+                    </button>
+                    <button class="quick-action-card" onclick="sendQuickAction('past')">
+                        <div class="card-icon">📚</div>
+                        <div class="card-title">過去問に挑戦</div>
+                        <div class="card-desc">試験レベルの問題</div>
+                    </button>
+                </div>
             </div>
         `;
 
-        console.log('🔄 会話をリセットしました');
+        console.log('🔄 新しいチャットを開始しました');
     } catch (error) {
         showError('リセットに失敗しました');
+    }
+}
+
+// クイックアクション
+function sendQuickAction(actionType) {
+    const input = document.getElementById('questionInput');
+    
+    let message = '';
+    switch(actionType) {
+        case 'quiz':
+            message = '問題を出してください';
+            break;
+        case 'term':
+            message = '重要な専門用語を1つ選んで解説してください';
+            break;
+        case 'past':
+            message = '過去問レベルの問題を1問出してください';
+            break;
+        default:
+            return;
+    }
+    
+    input.value = message;
+    sendQuestion();
+}
+
+// テキストエリア自動リサイズ
+function autoResize(textarea) {
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+}
+
+// Enterキー処理
+function handleKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendQuestion();
     }
 }
 
@@ -259,11 +337,6 @@ async function handleFileSelect(event) {
         return;
     }
     
-    if (!confirm(`"${file.name}" をアップロードしますか？\n\n処理には数分かかる場合があります。`)) {
-        event.target.value = '';
-        return;
-    }
-    
     await uploadPDF(file);
     event.target.value = '';
 }
@@ -273,14 +346,11 @@ async function uploadPDF(file) {
     const progressDiv = document.getElementById('uploadProgress');
     const progressFill = document.getElementById('progressBarFill');
     const statusText = document.getElementById('uploadStatus');
-    const uploadButton = document.querySelector('.upload-button');
     
     try {
         progressDiv.style.display = 'block';
         progressFill.style.width = '0%';
         statusText.textContent = 'アップロード中...';
-        uploadButton.disabled = true;
-        uploadButton.style.opacity = '0.5';
         
         const formData = new FormData();
         formData.append('file', file);
@@ -309,76 +379,30 @@ async function uploadPDF(file) {
         
         progressFill.style.width = '100%';
         statusText.textContent = '✅ 登録完了！';
-        statusText.style.color = '#28a745';
-        
-        alert(`✅ "${data.stats.filename}" を登録しました！\n\n` +
-              `ページ数: ${data.stats.page_count}\n` +
-              `チャンク数: ${data.stats.total_chunks}`);
         
         setTimeout(() => {
             initialize();
             progressDiv.style.display = 'none';
             progressFill.style.width = '0%';
-            statusText.style.color = '#6c757d';
         }, 2000);
         
     } catch (error) {
         console.error('アップロードエラー:', error);
         showError(`アップロード失敗: ${error.message}`);
         statusText.textContent = '❌ エラー';
-        statusText.style.color = '#dc3545';
         
         setTimeout(() => {
             progressDiv.style.display = 'none';
             progressFill.style.width = '0%';
-            statusText.style.color = '#6c757d';
         }, 3000);
-    } finally {
-        uploadButton.disabled = false;
-        uploadButton.style.opacity = '1';
     }
 }
 
-// Enterキーで送信
-function handleKeyPress(event) {
-    if (event.key === 'Enter') {
-        sendQuestion();
-    }
+// サイドバー切り替え
+function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    sidebar.classList.toggle('open');
 }
 
 // ページロード時に初期化
 window.addEventListener('load', initialize);
-// クイックアクション機能
-function sendQuickAction(actionType) {
-    const input = document.getElementById('questionInput');
-    const sendButton = document.getElementById('sendButton');
-    
-    // ボタンが無効化されている場合は処理しない
-    if (sendButton.disabled) {
-        return;
-    }
-    
-    let message = '';
-    
-    switch(actionType) {
-        case 'quiz':
-            message = '問題を出してください';
-            break;
-        case 'term':
-            message = '重要な専門用語を1つ選んで解説してください';
-            break;
-        case 'past':
-            message = '過去問レベルの問題を1問出してください';
-            break;
-        default:
-            return;
-    }
-    
-    // 入力欄に表示（視覚的フィードバック）
-    input.value = message;
-    
-    // 少し待ってから送信（ユーザーが見えるように）
-    setTimeout(() => {
-        sendQuestion();
-    }, 300);
-}

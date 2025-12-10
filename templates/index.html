@@ -1,131 +1,141 @@
-/* ============================================
-   クイックアクションボタン
-============================================ */
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>マルチメディア検定 学習チャット</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+</head>
+<body>
+    <!-- サイドバー -->
+    <div id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <button class="new-chat-btn" onclick="resetConversation()">
+                <span class="icon">➕</span>
+                新しいチャット
+            </button>
+        </div>
 
-.quick-actions {
-    display: flex;
-    gap: 10px;
-    padding: 15px 20px 10px 20px;
-    background: #f8f9fa;
-    border-top: 1px solid #e0e0e0;
-    flex-wrap: wrap;
-}
+        <div class="sidebar-content">
+            <!-- 統計情報 -->
+            <div class="sidebar-stats">
+                <div class="stat-item">
+                    <span class="stat-icon">📚</span>
+                    <div>
+                        <div class="stat-label">登録PDF</div>
+                        <div class="stat-value" id="pdfCount">-</div>
+                    </div>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-icon">📄</span>
+                    <div>
+                        <div class="stat-label">総ページ数</div>
+                        <div class="stat-value" id="totalPages">-</div>
+                    </div>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-icon">🔍</span>
+                    <div>
+                        <div class="stat-label">チャンク数</div>
+                        <div class="stat-value" id="totalChunks">-</div>
+                    </div>
+                </div>
+            </div>
 
-.action-btn {
-    flex: 1;
-    min-width: 120px;
-    padding: 12px 16px;
-    border: 2px solid transparent;
-    border-radius: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s ease;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
+            <!-- PDFアップロード -->
+            <div class="sidebar-section">
+                <button class="sidebar-btn upload-btn" onclick="document.getElementById('pdfFileInput').click()">
+                    <span class="icon">📤</span>
+                    PDFを追加
+                </button>
+                <input type="file" id="pdfFileInput" accept=".pdf" style="display: none;" onchange="handleFileSelect(event)">
+                
+                <div id="uploadProgress" class="upload-progress" style="display: none;">
+                    <div class="progress-bar">
+                        <div id="progressBarFill" class="progress-fill"></div>
+                    </div>
+                    <div id="uploadStatus" class="upload-status">アップロード中...</div>
+                </div>
+            </div>
 
-.action-btn:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-}
+            <!-- PDF一覧 -->
+            <div class="sidebar-section">
+                <h3 class="sidebar-title">登録済みPDF</h3>
+                <ul id="pdfList" class="pdf-list">
+                    <li class="pdf-loading">読み込み中...</li>
+                </ul>
+            </div>
+        </div>
 
-.action-btn:active {
-    transform: translateY(0);
-}
+        <div class="sidebar-footer">
+            <div class="db-status" id="dbType">接続確認中...</div>
+        </div>
+    </div>
 
-.action-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-}
+    <!-- サイドバー切り替えボタン（モバイル用） -->
+    <button id="sidebarToggle" class="sidebar-toggle" onclick="toggleSidebar()">
+        ☰
+    </button>
 
-/* 問題を出す（緑） */
-.quiz-btn {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-    color: white;
-}
+    <!-- メインコンテンツ -->
+    <div class="main-container">
+        <!-- チャットエリア -->
+        <div class="chat-wrapper">
+            <div id="chatContainer" class="chat-container">
+                <!-- ウェルカムメッセージ -->
+                <div class="welcome-screen">
+                    <div class="welcome-icon">🎓</div>
+                    <h1 class="welcome-title">マルチメディア検定<br>学習アシスタント</h1>
+                    
+                    <!-- クイックアクション -->
+                    <div class="quick-actions-grid">
+                        <button class="quick-action-card" onclick="sendQuickAction('quiz')">
+                            <div class="card-icon">📝</div>
+                            <div class="card-title">問題を出す</div>
+                            <div class="card-desc">理解度をチェック</div>
+                        </button>
+                        <button class="quick-action-card" onclick="sendQuickAction('term')">
+                            <div class="card-icon">📖</div>
+                            <div class="card-title">専門用語解説</div>
+                            <div class="card-desc">重要な用語を学ぶ</div>
+                        </button>
+                        <button class="quick-action-card" onclick="sendQuickAction('past')">
+                            <div class="card-icon">📚</div>
+                            <div class="card-title">過去問に挑戦</div>
+                            <div class="card-desc">試験レベルの問題</div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
 
-.quiz-btn:hover {
-    background: linear-gradient(135deg, #218838 0%, #1ba87e 100%);
-    border-color: #28a745;
-}
+        <!-- 入力エリア -->
+        <div class="input-wrapper">
+            <div class="input-container">
+                <div class="input-box">
+                    <textarea 
+                        id="questionInput" 
+                        placeholder="メッセージを入力してください..."
+                        rows="1"
+                        onkeydown="handleKeyDown(event)"
+                        oninput="autoResize(this)"
+                    ></textarea>
+                    <button id="sendButton" class="send-button" onclick="sendQuestion()">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                            <path d="M7 11L12 6L17 11M12 18V7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-footer">
+                    マルチメディア検定の学習をサポートします
+                </div>
+            </div>
+        </div>
+    </div>
 
-/* 専門用語を解説（青） */
-.term-btn {
-    background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
-    color: white;
-}
+    <!-- エラーメッセージ -->
+    <div id="errorMessage" class="error-toast"></div>
 
-.term-btn:hover {
-    background: linear-gradient(135deg, #0069d9 0%, #004085 100%);
-    border-color: #007bff;
-}
-
-/* 過去問を解説（紫） */
-.past-btn {
-    background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%);
-    color: white;
-}
-
-.past-btn:hover {
-    background: linear-gradient(135deg, #5e37a6 0%, #4c2a85 100%);
-    border-color: #6f42c1;
-}
-
-/* ============================================
-   スマートフォン対応（クイックアクション）
-============================================ */
-
-@media screen and (max-width: 768px) {
-    .quick-actions {
-        padding: 10px;
-        gap: 8px;
-    }
-    
-    .action-btn {
-        flex: 1 1 calc(33.333% - 8px);
-        min-width: 0;
-        padding: 10px 8px;
-        font-size: 12px;
-        border-radius: 8px;
-    }
-    
-    /* 3列レイアウト */
-    .action-btn:nth-child(n+4) {
-        margin-top: 0;
-    }
-}
-
-/* 極小画面（2列レイアウト） */
-@media screen and (max-width: 480px) {
-    .quick-actions {
-        gap: 6px;
-    }
-    
-    .action-btn {
-        flex: 1 1 calc(50% - 6px);
-        font-size: 11px;
-        padding: 8px 6px;
-    }
-    
-    /* 最後のボタンを2列目に */
-    .action-btn:nth-child(3) {
-        flex: 1 1 100%;
-    }
-}
-
-/* 横向き対応 */
-@media screen and (max-width: 768px) and (orientation: landscape) {
-    .quick-actions {
-        padding: 8px 10px;
-    }
-    
-    .action-btn {
-        padding: 8px 12px;
-        font-size: 11px;
-    }
-}
+    <script src="/assets/js/app.js"></script>
+</body>
+</html>
