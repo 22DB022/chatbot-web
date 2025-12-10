@@ -1,9 +1,14 @@
-flask>=3.0.0
-flask-cors>=4.0.0
-openai>=1.50.0
-python-dotenv>=1.0.0
-numpy>=1.24.0,<2.0.0
-pdfplumber>=0.10.0
-PyPDF2>=3.0.0
-gunicorn>=21.0.0pip install Flask-Limiter
-Flask-Limiter
+Flask==3.0.0
+Flask-CORS==4.0.0
+Werkzeug==3.0.1
+python-dotenv==1.0.0
+openai==1.12.0
+anthropic==0.18.1
+langchain==0.1.9
+gunicorn>=21.0.0
+Flask-Limiter==3.5.0
+
+# PDFやデータベース処理（必要に応じて）
+# PyPDF2==3.0.1
+# pdfplumber==0.10.3
+# SQLAlchemy==2.0.23
