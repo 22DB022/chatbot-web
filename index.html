@@ -423,21 +423,6 @@
                 <div class="message-content">${text.replace(/\n/g, '<br>')}</div>
             `;
 
-            if (!isUser && sources.length > 0) {
-                const sourcesHtml = `
-                    <div class="sources">
-                        <div class="sources-title">📖 参照した資料</div>
-                        ${sources.map((s, i) => `
-                            <div class="source-item">
-                                <span class="source-file">${s.filename}</span> - 
-                                ページ${s.page} 
-                                <span class="source-similarity">(類似度: ${s.similarity})</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-                messageDiv.querySelector('.message-content').insertAdjacentHTML('beforeend', sourcesHtml);
-            }
 
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
