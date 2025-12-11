@@ -1,6 +1,5 @@
 flask
 openai>=1.54.0
-pymysql
 pdfplumber
 gunicorn
 python-dotenv
@@ -8,3 +7,5 @@ numpy
 Flask-Limiter
 Pillow
 psycopg2-binary
+pymysql
+requests

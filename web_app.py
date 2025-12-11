@@ -475,7 +475,7 @@ def reset_conversation():
 
 @app.route('/api/upload-pdf', methods=['POST'])
 def upload_pdf():
-    """PDFアップロードと登録"""
+    """PDFアップロードと登録（AWS Lambda経由）"""
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'ファイルが選択されていません'}), 400
@@ -497,25 +497,59 @@ def upload_pdf():
         
         print(f"📤 PDFアップロード開始: {file.filename}")
         
-        import tempfile
+        # ファイルをBase64エンコード
+        import base64
+        pdf_data = file.read()
+        pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-            file.save(temp_file.name)
-            temp_path = temp_file.name
+        # AWS Lambda URLを取得
+        lambda_url = os.getenv('AWS_LAMBDA_URL')
         
-        try:
-            result = process_pdf_file(temp_path, file.filename)
+        if not lambda_url:
+            return jsonify({'error': 'AWS_LAMBDA_URLが設定されていません'}), 500
+        
+        print(f"🚀 AWS Lambdaに送信: {lambda_url}")
+        
+        import requests
+        
+        # Lambda関数を呼び出し
+        response = requests.post(
+            lambda_url,
+            json={
+                'pdf_data': pdf_base64,
+                'filename': file.filename
+            },
+            timeout=600  # 10分タイムアウト
+        )
+        
+        print(f"📨 Lambda応答: {response.status_code}")
+        
+        if response.status_code == 200:
+            result = response.json()
             
-            return jsonify({
-                'success': True,
-                'message': f'"{file.filename}" を登録しました',
-                'stats': result
-            })
-            
-        finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            if result.get('success'):
+                return jsonify({
+                    'success': True,
+                    'message': f'"{file.filename}" を登録しました',
+                    'stats': {
+                        'filename': result.get('filename'),
+                        'page_count': result.get('page_count'),
+                        'total_chars': result.get('total_chars'),
+                        'total_chunks': result.get('total_chunks')
+                    }
+                })
+            else:
+                error_msg = result.get('error', '不明なエラー')
+                print(f"❌ Lambda エラー: {error_msg}")
+                return jsonify({'error': f'処理エラー: {error_msg}'}), 500
+        else:
+            error_text = response.text
+            print(f"❌ Lambda HTTPエラー: {error_text}")
+            return jsonify({'error': f'処理エラー: {error_text}'}), 500
         
+    except requests.exceptions.Timeout:
+        print(f"⏰ タイムアウト")
+        return jsonify({'error': '処理がタイムアウトしました。PDFが大きすぎる可能性があります。'}), 504
     except Exception as e:
         import traceback
         traceback.print_exc()
