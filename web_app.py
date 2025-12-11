@@ -1,13 +1,13 @@
 """
 マルチメディア学習アプリ（Web版）
 既存のRAGロジックを使用したFlask API
+PostgreSQL/MySQL/SQLite 3種対応
 """
 from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from openai import OpenAI
 import os
-import pymysql
 import json
 import numpy as np
 from datetime import datetime
@@ -44,39 +44,44 @@ conversation_history = {}
 
 
 class RAGDatabase:
-    """RAG対応データベース（SQLite/MySQL両対応）"""
+    """RAG対応データベース（PostgreSQL/MySQL/SQLite 3種対応）"""
     
-    def __init__(self, use_mysql=False):
-        self.use_mysql = use_mysql
+    def __init__(self):
+        # 環境変数からデータベース設定を取得
+        self.db_url = os.getenv('DATABASE_URL')  # PostgreSQL (Supabase)
+        self.db_name = os.getenv('DB_NAME')       # MySQL (XAMPP)
         
-        if use_mysql:
-            if not MYSQL_AVAILABLE:
-                raise Exception("pymysqlをインストールしてください: pip install pymysql")
-            self.init_mysql()
+        # データベースタイプを判定
+        if self.db_url:
+            # PostgreSQL (Supabase) - 本番環境
+            print("✅ Supabase PostgreSQL接続")
+            self.db_type = 'postgresql'
+        elif self.db_name and MYSQL_AVAILABLE:
+            # MySQL (XAMPP) - ローカル開発
+            self.db_config = {
+                'host': os.getenv('DB_HOST', 'localhost'),
+                'user': os.getenv('DB_USER', 'root'),
+                'password': os.getenv('DB_PASSWORD', ''),
+                'database': self.db_name,
+                'charset': 'utf8mb4'
+            }
+            print(f"✅ MySQL接続設定完了: {self.db_name}")
+            self.db_type = 'mysql'
         else:
-            self.init_sqlite()
-    
-    def init_mysql(self):
-        """MySQL初期化"""
-        self.db_config = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'user': os.getenv('DB_USER', 'root'),
-            'password': os.getenv('DB_PASSWORD', ''),
-            'database': os.getenv('DB_NAME', 'study_chatbot_db'),
-            'charset': 'utf8mb4'
-        }
-        print("✅ MySQL接続設定完了")
-    
-    def init_sqlite(self):
-        """SQLite初期化"""
-        self.db_path = "rag_study_data.db"
-        print(f"✅ SQLiteデータベース: {self.db_path}")
+            # SQLite - フォールバック
+            self.db_path = "rag_study_data.db"
+            print(f"⚠️ SQLiteモード: {self.db_path}")
+            self.db_type = 'sqlite'
     
     def get_connection(self):
         """DB接続を取得"""
-        if self.use_mysql:
+        if self.db_type == 'postgresql':
+            import psycopg2
+            return psycopg2.connect(self.db_url)
+        elif self.db_type == 'mysql':
             return pymysql.connect(**self.db_config)
-        else:
+        else:  # sqlite
+            import sqlite3
             return sqlite3.connect(self.db_path)
     
     def vector_search(self, query_embedding, top_k=5):
@@ -84,13 +89,19 @@ class RAGDatabase:
         conn = self.get_connection()
         
         try:
-            if self.use_mysql:
+            if self.db_type == 'postgresql':
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT filename, chunk_text, embedding, page_number 
+                    FROM pdf_contents
+                """)
+            elif self.db_type == 'mysql':
                 cursor = conn.cursor(pymysql.cursors.DictCursor)
                 cursor.execute("""
                     SELECT filename, chunk_text, embedding, page_number 
                     FROM pdf_contents
                 """)
-            else:
+            else:  # sqlite
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -110,7 +121,23 @@ class RAGDatabase:
             
             for row in results:
                 try:
-                    chunk_embedding = json.loads(row['embedding'])
+                    # データベースタイプに応じて列にアクセス
+                    if self.db_type == 'postgresql':
+                        chunk_embedding = json.loads(row[2])
+                        filename = row[0]
+                        chunk_text = row[1]
+                        page_number = row[3]
+                    elif self.db_type == 'mysql':
+                        chunk_embedding = json.loads(row['embedding'])
+                        filename = row['filename']
+                        chunk_text = row['chunk_text']
+                        page_number = row['page_number']
+                    else:  # sqlite
+                        chunk_embedding = json.loads(row['embedding'])
+                        filename = row['filename']
+                        chunk_text = row['chunk_text']
+                        page_number = row['page_number']
+                    
                     chunk_vec = np.array(chunk_embedding)
                     
                     # コサイン類似度
@@ -119,9 +146,9 @@ class RAGDatabase:
                     )
                     
                     similarities.append({
-                        'filename': row['filename'],
-                        'text': row['chunk_text'],
-                        'page': row['page_number'],
+                        'filename': filename,
+                        'text': chunk_text,
+                        'page': page_number,
                         'similarity': float(similarity)
                     })
                 except Exception as e:
@@ -140,14 +167,24 @@ class RAGDatabase:
         conn = self.get_connection()
         
         try:
-            if self.use_mysql:
+            if self.db_type == 'postgresql':
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT filename, page_count, total_chars, total_chunks, added_date 
+                    FROM pdf_metadata 
+                    ORDER BY added_date DESC
+                """)
+                columns = ['filename', 'page_count', 'total_chars', 'total_chunks', 'added_date']
+                results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            elif self.db_type == 'mysql':
                 cursor = conn.cursor(pymysql.cursors.DictCursor)
                 cursor.execute("""
                     SELECT filename, page_count, total_chars, total_chunks, added_date 
                     FROM pdf_metadata 
                     ORDER BY added_date DESC
                 """)
-            else:
+                results = [dict(row) for row in cursor.fetchall()]
+            else:  # sqlite
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -155,10 +192,10 @@ class RAGDatabase:
                     FROM pdf_metadata 
                     ORDER BY added_date DESC
                 """)
+                results = [dict(row) for row in cursor.fetchall()]
             
-            results = cursor.fetchall()
             cursor.close()
-            return [dict(row) for row in results]
+            return results
             
         finally:
             conn.close()
@@ -169,40 +206,25 @@ class RAGDatabase:
         
         try:
             cursor = conn.cursor()
-            
-            if self.use_mysql:
-                cursor.execute("""
-                    SELECT 
-                        COUNT(*) as pdf_count,
-                        COALESCE(SUM(page_count), 0) as total_pages,
-                        COALESCE(SUM(total_chunks), 0) as total_chunks
-                    FROM pdf_metadata
-                """)
-            else:
-                cursor.execute("""
-                    SELECT 
-                        COUNT(*) as pdf_count,
-                        COALESCE(SUM(page_count), 0) as total_pages,
-                        COALESCE(SUM(total_chunks), 0) as total_chunks
-                    FROM pdf_metadata
-                """)
-            
+        
+            cursor.execute("""
+            SELECT 
+                COUNT(*) as pdf_count,
+                COALESCE(SUM(page_count), 0) as total_pages,
+                COALESCE(SUM(total_chunks), 0) as total_chunks
+            FROM pdf_metadata
+         """)
+        
             result = cursor.fetchone()
             cursor.close()
+        
+         # 全てのDBタイプでタプルが返るので統一処理
+            return {
+            'pdf_count': result[0],
+            'total_pages': result[1],
+            'total_chunks': result[2]
+         }
             
-            if self.use_mysql:
-                return {
-                    'pdf_count': result[0],
-                    'total_pages': result[1],
-                    'total_chunks': result[2]
-                }
-            else:
-                return {
-                    'pdf_count': result[0],
-                    'total_pages': result[1],
-                    'total_chunks': result[2]
-                }
-                
         finally:
             conn.close()
 
@@ -220,11 +242,13 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 - 必ず参照した資料のページ番号を示す
 - 検定に無関係な内容には丁寧に断る
 
-# 画像表示について（★新規追加★）
+# 画像表示について
 ユーザーが以下のような要求をした場合、該当ページの画像を表示する：
 - 「図を見せて」「画像を表示して」
 - 「図XX」「図表」「イラスト」などの言及
 - 「視覚的に見たい」「見せてほしい」
+
+対応方法: [IMAGE:ファイル名|ページ番号] の形式で指定
 
 # 対応パターン
 
@@ -252,21 +276,6 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 3. **必ず問題を1問出題する**（3択問題）
 4. ユーザーの回答を待つ
 
-### 例：
-```
-ユーザー: なるほど、分かった！
-AI: よし！じゃあ、本当に理解できたか確認してみよう！
-
-【問題】
-〜〜〜（問題内容）〜〜〜
-
-A) 〜
-B) 〜  
-C) 〜
-
-どれだと思う？
-```
-
 ## パターン3: 問題・演習を求められた場合
 1. 学習内容に沿った選択式問題を1問出題（A、B、Cの3択）
 2. ユーザーの回答を待つ
@@ -285,225 +294,12 @@ C) 〜
 - 「何を学習したい？」と聞く
 - 選択肢は出さない（ユーザーの自由な質問を促す）
 
-# 会話の進め方の原則
-
-## 説明時の心がけ
-- まず端的に答える（前置き不要）
-- 専門用語には簡単な補足を入れる
-- 身近な例を使う
-
-## 理解確認のタイミング（★重要★）
-- ユーザーが理解を示したら、**遠慮せず必ず問題を出す**
-- 「問題出してもいい？」と聞かない（確認のために出すのが前提）
-- ただし、ユーザーが「今はいい」「後で」と明確に断った場合のみスキップ
-
-## 問題出題時の心がけ
-- 問題は1問ずつ（連続で出さない）
-- 正解しても不正解でも、必ず理由を説明
-- 不正解でも落ち込ませない言葉選び
-
-## 学習の継続を促す工夫
-- 正解したら褒める（「素晴らしい！」「完璧だね！」「本当に理解できてるね！」）
-- 間違えても前向きな言葉（「いい線いってるよ！」「もう少しだね！」）
-- 学習の進捗を実感させる（「この分野はバッチリだね！」）
-
-# 入出力例
-
-## 入力例1: 用語の説明を求める
-```
-ユーザー: 暗号化について教えて
-```
-
-## 出力例1: 説明のみ
-```
-「暗号化」は、データを特別な方式で変換して、第三者が見ても内容が分からないようにする技術だよ！
-
-具体例：
-・URLが「https://」で始まるサイト → 通信が暗号化されている
-・ネットショッピングでの決済情報 → 暗号化で保護される
-
-[9.セキュリティと情報リテラシ.pdf - ページ8]
-
-ここまで理解できたかな？
-```
-
-## 入力例2: ユーザーが理解を示す（★重要★）
-```
-ユーザー: なるほど、分かった！
-```
-
-## 出力例2: 自動的に問題出題（★重要★）
-```
-よし！じゃあ、本当に理解できたか確認してみよう！
-
-【問題】
-次のうち、暗号化通信を示すURLはどれ？
-
-A) http://example.com
-B) https://example.com  
-C) ftp://example.com
-
-どれだと思う？
-```
-
-## 入力例3: 理解を示す別パターン
-```
-ユーザー: わかりました、ありがとう
-```
-
-## 出力例3: 自動的に問題出題
-```
-どういたしまして！
-じゃあ、理解度をチェックしてみよう！
-
-【問題】
-暗号化通信で使われるプロトコルは？
-
-A) http
-B) https
-C) ftp
-
-さっき学んだ内容だよ、答えてみて！
-```
-
-## 入力例4: 正解した場合
-```
-ユーザー: B
-```
-
-## 出力例4: 正解の対応
-```
-正解！素晴らしい！✨
-本当に理解できてるね！
-
-その通り、「https://」の「s」は「Secure（安全）」を意味していて、通信が暗号化されているんだ。
-
-補足：
-・http → 暗号化なし（情報が見える）
-・https → 暗号化あり（情報が守られる）
-
-[9.セキュリティと情報リテラシ.pdf - ページ8]
-
-完璧だね！他に学習したいことはある？
-```
-
-## 入力例5: 不正解の場合
-```
-ユーザー: 9
-```
-
-## 出力例5: 不正解の対応（1回目）
-```
-おしい！もう少しだね！
-
-ヒント：
-URLの最初の部分に注目してみて。
-「安全」を意味する「s」が入っているものが正解だよ。
-
-もう一度考えてみて！
-```
-
-## 入力例6: ユーザーが問題を断る
-```
-ユーザー: 分かったけど、今は問題はいいや
-```
-
-## 出力例6: 断られた場合
-```
-了解！また準備ができたら言ってね！
-
-他に学習したいことはある？
-```
-
-## 入力例7: 初回接触
-```
-ユーザー: こんにちは
-```
-
-## 出力例7: 初回対応
-```
-こんにちは！👋
-
-マルチメディア検定の学習をサポートするよ！
-
-今日は何を勉強したい？
-専門用語の説明でも、練習問題でも、なんでも聞いてね！
-```
-
 # 禁止事項
 - 資料外の情報を創作する
-- ユーザーが理解を示したのに問題を出さない（パターン2違反）
-- 間違いを責める口調（「違います」「間違っています」）
-- 連続して複数の問題を出す（1問ずつ、理解を確認してから）
+- ユーザーが理解を示したのに問題を出さない
+- 間違いを責める口調
+- 連続して複数の問題を出す
 - 長すぎる説明（400文字を大幅に超える）
-
-# 補足
-- 「教えて」「説明して」「〜とは」 → パターン1で対応
-- 「分かった」「理解した」「なるほど」 → **パターン2で必ず問題出題**
-- 「問題」「テスト」「練習」 → パターン3で対応
-- 「わからない」「難しい」 → 優しく丁寧に教える
-- 文脈が不明確 → 「〜について知りたいのかな？」と確認
-
-# 重要な注意事項
-**ユーザーが「分かった」「理解した」などと言った場合、必ず問題を出題すること。**
-これは理解度を確認するために極めて重要。
-ただし、ユーザーが明確に「今はいい」「後で」と断った場合のみスキップする。
-
-## 🎨 主な改善点
-
-### 1. **パターン2を新設**（★最重要★）
-ユーザーが理解を示したら**自動的に問題を出題**
-
-### 2. **理解を示すキーワード一覧**
-- 「分かった」「わかった」「理解した」
-- 「なるほど」「そういうことか」「そうなんだ」
-- 「OK」「了解」「大丈夫」
-- 「簡単だね」「覚えた」
-- 「ありがとう」（説明の後）
-
-### 3. **自然な流れで出題**
-
-ユーザー: なるほど！
-AI: よし！じゃあ、本当に理解できたか確認してみよう！
-【問題】...
-
-
-### 4. **断る余地を残す**
-ユーザーが「今はいい」と言ったらスキップ
-
-
-## 🧪 テスト例
-
-### テストケース1: 理解を示す
-
-ユーザー: 暗号化について教えて
-AI: [説明]
-ユーザー: なるほど、分かった！
-AI: よし！じゃあ、本当に理解できたか確認してみよう！
-【問題】...
-
-
-### テストケース2: 問題を断る
-
-ユーザー: 分かったけど、今は問題はいいや
-AI: 了解！また準備ができたら言ってね！
-他に学習したいことはある？
-
-
-### テストケース3: 説明後に「ありがとう」
-
-ユーザー: 暗号化について教えて
-AI: [説明]
-ユーザー: ありがとう
-AI: どういたしまして！
-じゃあ、理解度をチェックしてみよう！
-【問題】...
-
-## パターン6: 画像表示要求（★新規★）
-1. ユーザーが図や画像を要求
-2. 該当する資料のページを特定
-3. [IMAGE:ファイル名|ページ番号] の形式で指定
-4. 簡単な説明を添える
 """
 
 
@@ -518,42 +314,25 @@ def initialize():
     
     client = OpenAI(api_key=api_key)
     
-    # データベース初期化
-    use_sqlite_flag = os.getenv('USE_SQLITE', 'false').lower()
+    # データベース初期化（自動判定）
+    db = RAGDatabase()
     
-    if use_sqlite_flag == 'true':
-        use_mysql = False
-        print("✅ SQLiteモード（USE_SQLITE=true）")
-    elif MYSQL_AVAILABLE and os.getenv('DB_NAME'):
-        try:
-            test_config = {
-                'host': os.getenv('DB_HOST', 'localhost'),
-                'user': os.getenv('DB_USER', 'root'),
-                'password': os.getenv('DB_PASSWORD', ''),
-                'database': os.getenv('DB_NAME', 'study_chatbot_db'),
-                'charset': 'utf8mb4'
-            }
-            test_conn = pymysql.connect(**test_config)
-            test_conn.close()
-            use_mysql = True
-            print("✅ MySQL接続確認完了")
-        except Exception as e:
-            print(f"⚠️ MySQL接続失敗: {e}")
-            print("⚠️ SQLiteにフォールバックします")
-            use_mysql = False
+    if db.db_type == 'postgresql':
+        print(f"✅ RAGデータベース初期化完了 (PostgreSQL - Supabase)")
+    elif db.db_type == 'mysql':
+        print(f"✅ RAGデータベース初期化完了 (MySQL)")
     else:
-        use_mysql = False
-        print("✅ SQLiteモード（デフォルト）")
-    
-    db = RAGDatabase(use_mysql=use_mysql)
-    print(f"✅ RAGデータベース初期化完了 ({'MySQL' if use_mysql else 'SQLite'})")
+        print(f"✅ RAGデータベース初期化完了 (SQLite - フォールバック)")
 
 
 # ============================================
 # APIエンドポイント
 # ============================================
 
-
+@app.route('/')
+def index():
+    """メインページ"""
+    return render_template('index.html')
 
 
 @app.route('/api/health', methods=['GET'])
@@ -563,7 +342,7 @@ def health():
         stats = db.get_stats()
         return jsonify({
             'status': 'ok',
-            'database': 'MySQL' if db.use_mysql else 'SQLite',
+            'database': db.db_type.upper(),
             'stats': stats
         })
     except Exception as e:
@@ -580,14 +359,10 @@ def get_init_data():
         return jsonify({
             'stats': stats,
             'pdf_list': pdf_list,
-            'database_type': 'MySQL' if db.use_mysql else 'SQLite'
+            'database_type': db.db_type.upper()
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-@app.route('/')
-def index():
-    """メインページ"""
-    return render_template('index.html')
 
 
 @app.route('/api/query', methods=['POST'])
@@ -746,6 +521,7 @@ def upload_pdf():
         traceback.print_exc()
         return jsonify({'error': f'処理エラー: {str(e)}'}), 500
 
+
 @app.route('/api/images/<filename>/<int:page_number>', methods=['GET'])
 def get_page_images(filename, page_number):
     """特定ページの画像を取得"""
@@ -762,6 +538,11 @@ def get_page_images(filename, page_number):
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ============================================
+# PDF処理関数
+# ============================================
 
 def process_pdf_file(pdf_path, filename):
     """PDFファイルを処理してデータベースに登録"""
@@ -790,186 +571,25 @@ def process_pdf_file(pdf_path, filename):
     cursor = conn.cursor()
     
     try:
-        if db.use_mysql:
+        if db.db_type == 'postgresql':
             cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = %s", (filename,))
-        else:
+        elif db.db_type == 'mysql':
+            cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = %s", (filename,))
+        else:  # sqlite
             cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = ?", (filename,))
         
         exists = cursor.fetchone()[0] > 0
         
         if exists:
-            if db.use_mysql:
-                cursor.execute("DELETE FROM pdf_metadata WHERE filename = %s", (filename,))
-                cursor.execute("DELETE FROM pdf_contents WHERE filename = %s", (filename,))
-            else:
-                cursor.execute("DELETE FROM pdf_metadata WHERE filename = ?", (filename,))
-                cursor.execute("DELETE FROM pdf_contents WHERE filename = ?", (filename,))
-            conn.commit()
-            print(f"⚠️ 既存データを削除: {filename}")
-        
-    finally:
-        cursor.close()
-    
-    # チャンク化とベクトル化
-    all_chunks = []
-    
-    for page_data in pages_text:
-        chunks = chunk_text(page_data['text'])
-        
-        for chunk in chunks:
-            embedding = create_embedding(chunk)
-            all_chunks.append({
-                'page': page_data['page'],
-                'text': chunk,
-                'embedding': embedding
-            })
-    
-    print(f"✅ 全{len(all_chunks)}チャンク処理完了")
-    
-    # データベースに保存
-    conn = db.get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        if db.use_mysql:
-            cursor.execute("""
-                INSERT INTO pdf_metadata 
-                (filename, page_count, total_chars, total_chunks, added_date)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now()))
-        else:
-            cursor.execute("""
-                INSERT INTO pdf_metadata 
-                (filename, page_count, total_chars, total_chunks, added_date)
-                VALUES (?, ?, ?, ?, ?)
-            """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now().isoformat()))
-        
-        for chunk in all_chunks:
-            embedding_json = json.dumps(chunk['embedding'])
-            
-            if db.use_mysql:
-                cursor.execute("""
-                    INSERT INTO pdf_contents 
-                    (filename, page_number, chunk_text, embedding, added_date)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (filename, chunk['page'], chunk['text'], embedding_json, datetime.now()))
-            else:
-                cursor.execute("""
-                    INSERT INTO pdf_contents 
-                    (filename, page_number, chunk_text, embedding, added_date)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (filename, chunk['page'], chunk['text'], embedding_json, datetime.now().isoformat()))
-        
-        conn.commit()
-        print(f"✅ データベース登録完了: {filename}")
-        
-        return {
-            'filename': filename,
-            'page_count': len(pages_text),
-            'total_chars': total_chars,
-            'total_chunks': len(all_chunks)
-        }
-        
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        cursor.close()
-        conn.close()
-def extract_images_from_pdf(pdf_path, filename):
-    """PDFから画像を抽出"""
-    import pdfplumber
-    from PIL import Image
-    from datetime import datetime
-    import io
-    
-    # 画像保存ディレクトリ
-    images_dir = os.path.join('assets', 'images', 'pdf_images')
-    os.makedirs(images_dir, exist_ok=True)
-    
-    print(f"🖼️ 画像抽出開始: {filename}")
-    
-    extracted_images = []
-    
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_num, page in enumerate(pdf.pages, 1):
-            # ページ内の画像を抽出
-            if hasattr(page, 'images') and page.images:
-                for img_index, img_info in enumerate(page.images, 1):
-                    try:
-                        # 画像データを取得
-                        if hasattr(page, 'extract_image'):
-                            # pdfplumber 0.9.0以降
-                            image_obj = page.within_bbox(
-                                (img_info['x0'], img_info['top'], 
-                                 img_info['x1'], img_info['bottom'])
-                            ).to_image()
-                            
-                            # 画像を保存
-                            base_filename = os.path.splitext(filename)[0]
-                            safe_filename = "".join(c for c in base_filename if c.isalnum() or c in (' ', '-', '_'))
-                            image_filename = f"{safe_filename}_page{page_num}_img{img_index}.png"
-                            image_path = os.path.join(images_dir, image_filename)
-                            
-                            image_obj.save(image_path)
-                            
-                            # 画像情報を記録
-                            extracted_images.append({
-                                'filename': filename,
-                                'page_number': page_num,
-                                'image_path': os.path.join('assets', 'images', 'pdf_images', image_filename),
-                                'image_index': img_index,
-                                'width': int(img_info['width']),
-                                'height': int(img_info['height']),
-                                'added_date': datetime.now().isoformat()
-                            })
-                            
-                            print(f"  ✓ ページ{page_num} 画像{img_index}を抽出")
-                    except Exception as e:
-                        print(f"  ⚠️ ページ{page_num} 画像{img_index}の抽出失敗: {e}")
-                        continue
-    
-    print(f"✅ {len(extracted_images)}個の画像を抽出しました")
-    def process_pdf_file(pdf_path, filename):
-        """PDFファイルを処理してデータベースに登録"""
-    import pdfplumber
-    
-    print(f"📄 PDF処理開始: {filename}")
-    
-    pages_text = []
-    total_chars = 0
-    
-    with pdfplumber.open(pdf_path) as pdf:
-        for i, page in enumerate(pdf.pages, 1):
-            text = page.extract_text()
-            if text:
-                text = text.strip()
-                pages_text.append({'page': i, 'text': text})
-                total_chars += len(text)
-    
-    if not pages_text:
-        raise Exception("PDFからテキストを抽出できませんでした")
-    
-    print(f"✅ 全{len(pages_text)}ページ抽出完了")
-    
-    # 既存データをチェック
-    conn = db.get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        if db.use_mysql:
-            cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = %s", (filename,))
-        else:
-            cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = ?", (filename,))
-        
-        exists = cursor.fetchone()[0] > 0
-        
-        if exists:
-            if db.use_mysql:
+            if db.db_type == 'postgresql':
                 cursor.execute("DELETE FROM pdf_metadata WHERE filename = %s", (filename,))
                 cursor.execute("DELETE FROM pdf_contents WHERE filename = %s", (filename,))
                 cursor.execute("DELETE FROM pdf_images WHERE filename = %s", (filename,))
-            else:
+            elif db.db_type == 'mysql':
+                cursor.execute("DELETE FROM pdf_metadata WHERE filename = %s", (filename,))
+                cursor.execute("DELETE FROM pdf_contents WHERE filename = %s", (filename,))
+                cursor.execute("DELETE FROM pdf_images WHERE filename = %s", (filename,))
+            else:  # sqlite
                 cursor.execute("DELETE FROM pdf_metadata WHERE filename = ?", (filename,))
                 cursor.execute("DELETE FROM pdf_contents WHERE filename = ?", (filename,))
                 cursor.execute("DELETE FROM pdf_images WHERE filename = ?", (filename,))
@@ -1000,29 +620,43 @@ def extract_images_from_pdf(pdf_path, filename):
     cursor = conn.cursor()
     
     try:
-        if db.use_mysql:
+        # メタデータを挿入
+        if db.db_type == 'postgresql':
             cursor.execute("""
                 INSERT INTO pdf_metadata 
                 (filename, page_count, total_chars, total_chunks, added_date)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now()))
-        else:
+                VALUES (%s, %s, %s, %s, NOW())
+            """, (filename, len(pages_text), total_chars, len(all_chunks)))
+        elif db.db_type == 'mysql':
+            cursor.execute("""
+                INSERT INTO pdf_metadata 
+                (filename, page_count, total_chars, total_chunks, added_date)
+                VALUES (%s, %s, %s, %s, NOW())
+            """, (filename, len(pages_text), total_chars, len(all_chunks)))
+        else:  # sqlite
             cursor.execute("""
                 INSERT INTO pdf_metadata 
                 (filename, page_count, total_chars, total_chunks, added_date)
                 VALUES (?, ?, ?, ?, ?)
             """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now().isoformat()))
         
+        # チャンクを挿入
         for chunk in all_chunks:
             embedding_json = json.dumps(chunk['embedding'])
             
-            if db.use_mysql:
+            if db.db_type == 'postgresql':
                 cursor.execute("""
                     INSERT INTO pdf_contents 
                     (filename, page_number, chunk_text, embedding, added_date)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (filename, chunk['page'], chunk['text'], embedding_json, datetime.now()))
-            else:
+                    VALUES (%s, %s, %s, %s, NOW())
+                """, (filename, chunk['page'], chunk['text'], embedding_json))
+            elif db.db_type == 'mysql':
+                cursor.execute("""
+                    INSERT INTO pdf_contents 
+                    (filename, page_number, chunk_text, embedding, added_date)
+                    VALUES (%s, %s, %s, %s, NOW())
+                """, (filename, chunk['page'], chunk['text'], embedding_json))
+            else:  # sqlite
                 cursor.execute("""
                     INSERT INTO pdf_contents 
                     (filename, page_number, chunk_text, embedding, added_date)
@@ -1032,7 +666,7 @@ def extract_images_from_pdf(pdf_path, filename):
         conn.commit()
         print(f"✅ データベース登録完了: {filename}")
         
-        # ★ 画像を抽出して保存（新規追加）
+        # 画像を抽出して保存
         try:
             images = extract_images_from_pdf(pdf_path, filename)
             if images:
@@ -1053,6 +687,65 @@ def extract_images_from_pdf(pdf_path, filename):
     finally:
         cursor.close()
         conn.close()
+
+
+def extract_images_from_pdf(pdf_path, filename):
+    """PDFから画像を抽出"""
+    import pdfplumber
+    from PIL import Image
+    import io
+    
+    # 画像保存ディレクトリ
+    images_dir = os.path.join('assets', 'images', 'pdf_images')
+    os.makedirs(images_dir, exist_ok=True)
+    
+    print(f"🖼️ 画像抽出開始: {filename}")
+    
+    extracted_images = []
+    
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                # ページ内の画像を抽出
+                if hasattr(page, 'images') and page.images:
+                    for img_index, img_info in enumerate(page.images, 1):
+                        try:
+                            # 画像データを取得
+                            if hasattr(page, 'extract_image'):
+                                # pdfplumber 0.9.0以降
+                                image_obj = page.within_bbox(
+                                    (img_info['x0'], img_info['top'], 
+                                     img_info['x1'], img_info['bottom'])
+                                ).to_image()
+                                
+                                # 画像を保存
+                                base_filename = os.path.splitext(filename)[0]
+                                safe_filename = "".join(c for c in base_filename if c.isalnum() or c in (' ', '-', '_'))
+                                image_filename = f"{safe_filename}_page{page_num}_img{img_index}.png"
+                                image_path = os.path.join(images_dir, image_filename)
+                                
+                                image_obj.save(image_path)
+                                
+                                # 画像情報を記録
+                                extracted_images.append({
+                                    'filename': filename,
+                                    'page_number': page_num,
+                                    'image_path': os.path.join('assets', 'images', 'pdf_images', image_filename),
+                                    'image_index': img_index,
+                                    'width': int(img_info['width']),
+                                    'height': int(img_info['height']),
+                                    'added_date': datetime.now().isoformat()
+                                })
+                                
+                                print(f"  ✓ ページ{page_num} 画像{img_index}を抽出")
+                        except Exception as e:
+                            print(f"  ⚠️ ページ{page_num} 画像{img_index}の抽出失敗: {e}")
+                            continue
+    except Exception as e:
+        print(f"❌ PDF画像抽出エラー: {e}")
+        return []
+    
+    print(f"✅ {len(extracted_images)}個の画像を抽出しました")
     return extracted_images
 
 
@@ -1066,19 +759,46 @@ def save_images_to_db(images):
     
     try:
         for img in images:
-            cursor.execute("""
-                INSERT INTO pdf_images 
-                (filename, page_number, image_path, image_index, width, height, added_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                img['filename'],
-                img['page_number'],
-                img['image_path'],
-                img['image_index'],
-                img['width'],
-                img['height'],
-                img['added_date']
-            ))
+            if db.db_type == 'postgresql':
+                cursor.execute("""
+                    INSERT INTO pdf_images 
+                    (filename, page_number, image_path, image_index, width, height, added_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                """, (
+                    img['filename'],
+                    img['page_number'],
+                    img['image_path'],
+                    img['image_index'],
+                    img['width'],
+                    img['height']
+                ))
+            elif db.db_type == 'mysql':
+                cursor.execute("""
+                    INSERT INTO pdf_images 
+                    (filename, page_number, image_path, image_index, width, height, added_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                """, (
+                    img['filename'],
+                    img['page_number'],
+                    img['image_path'],
+                    img['image_index'],
+                    img['width'],
+                    img['height']
+                ))
+            else:  # sqlite
+                cursor.execute("""
+                    INSERT INTO pdf_images 
+                    (filename, page_number, image_path, image_index, width, height, added_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    img['filename'],
+                    img['page_number'],
+                    img['image_path'],
+                    img['image_index'],
+                    img['width'],
+                    img['height'],
+                    img['added_date']
+                ))
         
         conn.commit()
         print(f"✅ {len(images)}個の画像情報をデータベースに保存")
@@ -1094,22 +814,46 @@ def save_images_to_db(images):
 def get_images_for_page(filename, page_number):
     """特定ページの画像を取得"""
     conn = db.get_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
     
     try:
-        cursor.execute("""
-            SELECT image_path, image_index, width, height
-            FROM pdf_images
-            WHERE filename = ? AND page_number = ?
-            ORDER BY image_index
-        """, (filename, page_number))
+        if db.db_type == 'postgresql':
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT image_path, image_index, width, height
+                FROM pdf_images
+                WHERE filename = %s AND page_number = %s
+                ORDER BY image_index
+            """, (filename, page_number))
+            
+            columns = ['image_path', 'image_index', 'width', 'height']
+            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        elif db.db_type == 'mysql':
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+            cursor.execute("""
+                SELECT image_path, image_index, width, height
+                FROM pdf_images
+                WHERE filename = %s AND page_number = %s
+                ORDER BY image_index
+            """, (filename, page_number))
+            
+            results = [dict(row) for row in cursor.fetchall()]
+        else:  # sqlite
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT image_path, image_index, width, height
+                FROM pdf_images
+                WHERE filename = ? AND page_number = ?
+                ORDER BY image_index
+            """, (filename, page_number))
+            
+            results = [dict(row) for row in cursor.fetchall()]
         
-        results = cursor.fetchall()
-        return [dict(row) for row in results]
-    finally:
         cursor.close()
+        return results
+    finally:
         conn.close()
+
 
 def chunk_text(text, max_chunk_size=1000, overlap=200):
     """テキストをチャンクに分割"""
