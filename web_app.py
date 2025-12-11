@@ -210,7 +210,7 @@ class RAGDatabase:
 BASE_SYSTEM_PROMPT = """# 前提条件
 - あなたはマルチメディア検定ベーシック対策の教育AIアシスタントです
 - ユーザーは検定合格を目指す学習者です
-- 提供された学習資料のみを参照して回答します
+- 絶対に提供された学習資料のみを参照して回答します
 
 # 制約条件
 - 学習資料に記載されていない内容は「資料に記載がありません」と答える
@@ -219,6 +219,12 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 - 回答は400文字以内を目安に簡潔にまとめる
 - 必ず参照した資料のページ番号を示す
 - 検定に無関係な内容には丁寧に断る
+
+# 画像表示について（★新規追加★）
+ユーザーが以下のような要求をした場合、該当ページの画像を表示する：
+- 「図を見せて」「画像を表示して」
+- 「図XX」「図表」「イラスト」などの言及
+- 「視覚的に見たい」「見せてほしい」
 
 # 対応パターン
 
@@ -492,6 +498,12 @@ AI: [説明]
 AI: どういたしまして！
 じゃあ、理解度をチェックしてみよう！
 【問題】...
+
+## パターン6: 画像表示要求（★新規★）
+1. ユーザーが図や画像を要求
+2. 該当する資料のページを特定
+3. [IMAGE:ファイル名|ページ番号] の形式で指定
+4. 簡単な説明を添える
 """
 
 
@@ -734,6 +746,22 @@ def upload_pdf():
         traceback.print_exc()
         return jsonify({'error': f'処理エラー: {str(e)}'}), 500
 
+@app.route('/api/images/<filename>/<int:page_number>', methods=['GET'])
+def get_page_images(filename, page_number):
+    """特定ページの画像を取得"""
+    try:
+        images = get_images_for_page(filename, page_number)
+        
+        # 画像パスをURLパスに変換
+        for img in images:
+            img['url'] = '/' + img['image_path'].replace('\\', '/')
+        
+        return jsonify({
+            'images': images,
+            'count': len(images)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 def process_pdf_file(pdf_path, filename):
     """PDFファイルを処理してデータベースに登録"""
@@ -848,7 +876,240 @@ def process_pdf_file(pdf_path, filename):
     finally:
         cursor.close()
         conn.close()
+def extract_images_from_pdf(pdf_path, filename):
+    """PDFから画像を抽出"""
+    import pdfplumber
+    from PIL import Image
+    from datetime import datetime
+    import io
+    
+    # 画像保存ディレクトリ
+    images_dir = os.path.join('assets', 'images', 'pdf_images')
+    os.makedirs(images_dir, exist_ok=True)
+    
+    print(f"🖼️ 画像抽出開始: {filename}")
+    
+    extracted_images = []
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for page_num, page in enumerate(pdf.pages, 1):
+            # ページ内の画像を抽出
+            if hasattr(page, 'images') and page.images:
+                for img_index, img_info in enumerate(page.images, 1):
+                    try:
+                        # 画像データを取得
+                        if hasattr(page, 'extract_image'):
+                            # pdfplumber 0.9.0以降
+                            image_obj = page.within_bbox(
+                                (img_info['x0'], img_info['top'], 
+                                 img_info['x1'], img_info['bottom'])
+                            ).to_image()
+                            
+                            # 画像を保存
+                            base_filename = os.path.splitext(filename)[0]
+                            safe_filename = "".join(c for c in base_filename if c.isalnum() or c in (' ', '-', '_'))
+                            image_filename = f"{safe_filename}_page{page_num}_img{img_index}.png"
+                            image_path = os.path.join(images_dir, image_filename)
+                            
+                            image_obj.save(image_path)
+                            
+                            # 画像情報を記録
+                            extracted_images.append({
+                                'filename': filename,
+                                'page_number': page_num,
+                                'image_path': os.path.join('assets', 'images', 'pdf_images', image_filename),
+                                'image_index': img_index,
+                                'width': int(img_info['width']),
+                                'height': int(img_info['height']),
+                                'added_date': datetime.now().isoformat()
+                            })
+                            
+                            print(f"  ✓ ページ{page_num} 画像{img_index}を抽出")
+                    except Exception as e:
+                        print(f"  ⚠️ ページ{page_num} 画像{img_index}の抽出失敗: {e}")
+                        continue
+    
+    print(f"✅ {len(extracted_images)}個の画像を抽出しました")
+    def process_pdf_file(pdf_path, filename):
+        """PDFファイルを処理してデータベースに登録"""
+    import pdfplumber
+    
+    print(f"📄 PDF処理開始: {filename}")
+    
+    pages_text = []
+    total_chars = 0
+    
+    with pdfplumber.open(pdf_path) as pdf:
+        for i, page in enumerate(pdf.pages, 1):
+            text = page.extract_text()
+            if text:
+                text = text.strip()
+                pages_text.append({'page': i, 'text': text})
+                total_chars += len(text)
+    
+    if not pages_text:
+        raise Exception("PDFからテキストを抽出できませんでした")
+    
+    print(f"✅ 全{len(pages_text)}ページ抽出完了")
+    
+    # 既存データをチェック
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if db.use_mysql:
+            cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = %s", (filename,))
+        else:
+            cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = ?", (filename,))
+        
+        exists = cursor.fetchone()[0] > 0
+        
+        if exists:
+            if db.use_mysql:
+                cursor.execute("DELETE FROM pdf_metadata WHERE filename = %s", (filename,))
+                cursor.execute("DELETE FROM pdf_contents WHERE filename = %s", (filename,))
+                cursor.execute("DELETE FROM pdf_images WHERE filename = %s", (filename,))
+            else:
+                cursor.execute("DELETE FROM pdf_metadata WHERE filename = ?", (filename,))
+                cursor.execute("DELETE FROM pdf_contents WHERE filename = ?", (filename,))
+                cursor.execute("DELETE FROM pdf_images WHERE filename = ?", (filename,))
+            conn.commit()
+            print(f"⚠️ 既存データを削除: {filename}")
+        
+    finally:
+        cursor.close()
+    
+    # チャンク化とベクトル化
+    all_chunks = []
+    
+    for page_data in pages_text:
+        chunks = chunk_text(page_data['text'])
+        
+        for chunk in chunks:
+            embedding = create_embedding(chunk)
+            all_chunks.append({
+                'page': page_data['page'],
+                'text': chunk,
+                'embedding': embedding
+            })
+    
+    print(f"✅ 全{len(all_chunks)}チャンク処理完了")
+    
+    # データベースに保存
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        if db.use_mysql:
+            cursor.execute("""
+                INSERT INTO pdf_metadata 
+                (filename, page_count, total_chars, total_chunks, added_date)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now()))
+        else:
+            cursor.execute("""
+                INSERT INTO pdf_metadata 
+                (filename, page_count, total_chars, total_chunks, added_date)
+                VALUES (?, ?, ?, ?, ?)
+            """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now().isoformat()))
+        
+        for chunk in all_chunks:
+            embedding_json = json.dumps(chunk['embedding'])
+            
+            if db.use_mysql:
+                cursor.execute("""
+                    INSERT INTO pdf_contents 
+                    (filename, page_number, chunk_text, embedding, added_date)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (filename, chunk['page'], chunk['text'], embedding_json, datetime.now()))
+            else:
+                cursor.execute("""
+                    INSERT INTO pdf_contents 
+                    (filename, page_number, chunk_text, embedding, added_date)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (filename, chunk['page'], chunk['text'], embedding_json, datetime.now().isoformat()))
+        
+        conn.commit()
+        print(f"✅ データベース登録完了: {filename}")
+        
+        # ★ 画像を抽出して保存（新規追加）
+        try:
+            images = extract_images_from_pdf(pdf_path, filename)
+            if images:
+                save_images_to_db(images)
+        except Exception as img_error:
+            print(f"⚠️ 画像処理でエラー（処理は継続）: {img_error}")
+        
+        return {
+            'filename': filename,
+            'page_count': len(pages_text),
+            'total_chars': total_chars,
+            'total_chunks': len(all_chunks)
+        }
+        
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+    return extracted_images
 
+
+def save_images_to_db(images):
+    """画像情報をデータベースに保存"""
+    if not images:
+        return
+    
+    conn = db.get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        for img in images:
+            cursor.execute("""
+                INSERT INTO pdf_images 
+                (filename, page_number, image_path, image_index, width, height, added_date)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                img['filename'],
+                img['page_number'],
+                img['image_path'],
+                img['image_index'],
+                img['width'],
+                img['height'],
+                img['added_date']
+            ))
+        
+        conn.commit()
+        print(f"✅ {len(images)}個の画像情報をデータベースに保存")
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ 画像情報の保存エラー: {e}")
+        raise e
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_images_for_page(filename, page_number):
+    """特定ページの画像を取得"""
+    conn = db.get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT image_path, image_index, width, height
+            FROM pdf_images
+            WHERE filename = ? AND page_number = ?
+            ORDER BY image_index
+        """, (filename, page_number))
+        
+        results = cursor.fetchall()
+        return [dict(row) for row in results]
+    finally:
+        cursor.close()
+        conn.close()
 
 def chunk_text(text, max_chunk_size=1000, overlap=200):
     """テキストをチャンクに分割"""

@@ -734,3 +734,106 @@ body {
 .chat-wrapper::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
 }
+
+/* ============================================
+   メッセージ内の画像
+============================================ */
+
+.message-images {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.message-image-wrapper {
+    max-width: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+}
+
+.message-image {
+    width: 100%;
+    height: auto;
+    display: block;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.message-image:hover {
+    transform: scale(1.02);
+}
+
+/* 画像モーダル（拡大表示） */
+.image-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.9);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    cursor: pointer;
+    animation: fadeIn 0.3s ease;
+}
+
+.modal-image {
+    max-width: 90%;
+    max-height: 90%;
+    object-fit: contain;
+    border-radius: 8px;
+}
+
+.modal-close {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 44px;
+    height: 44px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    color: white;
+    font-size: 24px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.modal-close:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+/* マークダウン風スタイル */
+.message-content strong {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.message-content code {
+    background: rgba(0, 0, 0, 0.05);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+}
+
+.message-content .list-item {
+    display: block;
+    padding-left: 20px;
+    position: relative;
+}
+
+.message-content .list-item::before {
+    content: '•';
+    position: absolute;
+    left: 8px;
+    color: var(--accent-color);
+}

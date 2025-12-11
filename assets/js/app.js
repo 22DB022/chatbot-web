@@ -151,13 +151,42 @@ function addMessageToUI(text, isUser) {
     
     const content = document.createElement('div');
     content.className = 'message-content';
-    content.innerHTML = text.replace(/\n/g, '<br>');
+    
+    // ★ 画像タグを処理（ボットメッセージのみ）
+    let displayText = text;
+    if (!isUser) {
+        displayText = processImageTags(text, content);
+    }
+    
+    // ★ HTMLエスケープしてから改行を<br>に変換
+    const escapedText = escapeHtml(displayText);
+    content.innerHTML = escapedText.replace(/\n/g, '<br>');
     
     messageDiv.appendChild(avatar);
     messageDiv.appendChild(content);
     
     chatContainer.appendChild(messageDiv);
     scrollToBottom();
+}
+
+// マークダウン風のテキストをHTMLに変換
+function formatMarkdown(text) {
+    // HTMLエスケープ
+    let html = escapeHtml(text);
+    
+    // 太字: **text** → <strong>text</strong>
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    
+    // コードブロック: ```code``` → <code>code</code>
+    html = html.replace(/```(.+?)```/g, '<code>$1</code>');
+    
+    // リストマーカー: ・ または - で始まる行
+    html = html.replace(/^[・\-]\s*(.+)$/gm, '<span class="list-item">$1</span>');
+    
+    // 改行を<br>に変換
+    html = html.replace(/\n/g, '<br>');
+    
+    return html;
 }
 
 // スクロールを下に
@@ -613,4 +642,82 @@ function deleteChatHistory(event, sessionId) {
         console.error('会話履歴の削除エラー:', error);
         showError('会話履歴の削除に失敗しました');
     }
+}
+// 画像を読み込んで表示
+async function loadAndDisplayImages(filename, pageNumber, messageElement) {
+    try {
+        const response = await fetch(`/api/images/${encodeURIComponent(filename)}/${pageNumber}`);
+        
+        if (!response.ok) {
+            console.error('画像の取得に失敗しました');
+            return;
+        }
+        
+        const data = await response.json();
+        
+        if (data.images && data.images.length > 0) {
+            // 画像コンテナを作成
+            const imageContainer = document.createElement('div');
+            imageContainer.className = 'message-images';
+            
+            data.images.forEach(img => {
+                const imageWrapper = document.createElement('div');
+                imageWrapper.className = 'message-image-wrapper';
+                
+                const image = document.createElement('img');
+                image.src = img.url;
+                image.alt = `${filename} ページ${pageNumber} 図${img.image_index}`;
+                image.className = 'message-image';
+                image.loading = 'lazy';
+                
+                // クリックで拡大
+                image.onclick = () => openImageModal(img.url, image.alt);
+                
+                imageWrapper.appendChild(image);
+                imageContainer.appendChild(imageWrapper);
+            });
+            
+            messageElement.appendChild(imageContainer);
+        }
+    } catch (error) {
+        console.error('画像の読み込みエラー:', error);
+    }
+}
+
+// 画像モーダル（拡大表示）
+function openImageModal(src, alt) {
+    const modal = document.createElement('div');
+    modal.className = 'image-modal';
+    modal.onclick = () => modal.remove();
+    
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = alt;
+    img.className = 'modal-image';
+    
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '✕';
+    closeBtn.className = 'modal-close';
+    closeBtn.onclick = () => modal.remove();
+    
+    modal.appendChild(closeBtn);
+    modal.appendChild(img);
+    document.body.appendChild(modal);
+}
+
+// メッセージ内の [IMAGE:...] タグを処理
+function processImageTags(text, messageElement) {
+    const imageTagRegex = /\[IMAGE:([^\|]+)\|(\d+)\]/g;
+    let match;
+    
+    while ((match = imageTagRegex.exec(text)) !== null) {
+        const filename = match[1];
+        const pageNumber = parseInt(match[2]);
+        
+        // 画像を非同期で読み込み
+        loadAndDisplayImages(filename, pageNumber, messageElement);
+    }
+    
+    // [IMAGE:...] タグをテキストから削除
+    return text.replace(imageTagRegex, '');
 }

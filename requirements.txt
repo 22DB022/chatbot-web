@@ -6,3 +6,5 @@ gunicorn
 python-dotenv
 numpy
 Flask-Limiter
+Pillow
+psycopg2-binary
