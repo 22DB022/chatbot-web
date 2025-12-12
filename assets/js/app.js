@@ -2,6 +2,163 @@
 let SESSION_ID;
 let chatMessages = [];
 
+// ========================================
+// グローバル変数
+// ========================================
+let conversationId = null;
+let currentImage = null; // 追加：現在の画像
+
+// ========================================
+// 初期化
+// ========================================
+document.addEventListener('DOMContentLoaded', () => {
+    loadInitialData();
+    setupEventListeners();
+    setupImageUpload(); // 追加
+});
+
+// ========================================
+// 画像アップロード機能
+// ========================================
+function setupImageUpload() {
+    const imageUploadBtn = document.getElementById('imageUploadBtn');
+    const imageInput = document.getElementById('imageInput');
+    const imagePreview = document.getElementById('imagePreview');
+    const imagePreviewContainer = document.getElementById('imagePreviewContainer');
+    const removeImageBtn = document.getElementById('removeImageBtn');
+    
+    // 画像アップロードボタンクリック
+    imageUploadBtn.addEventListener('click', () => {
+        imageInput.click();
+    });
+    
+    // 画像選択時
+    imageInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        // ファイルサイズチェック（5MB以下）
+        if (file.size > 5 * 1024 * 1024) {
+            showError('画像サイズは5MB以下にしてください');
+            imageInput.value = '';
+            return;
+        }
+        
+        // ファイルタイプチェック
+        if (!file.type.startsWith('image/')) {
+            showError('画像ファイルを選択してください');
+            imageInput.value = '';
+            return;
+        }
+        
+        // Base64に変換してプレビュー表示
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            currentImage = e.target.result;
+            imagePreview.src = currentImage;
+            imagePreviewContainer.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+    });
+    
+    // 画像削除ボタン
+    removeImageBtn.addEventListener('click', () => {
+        clearImage();
+    });
+}
+
+function clearImage() {
+    currentImage = null;
+    document.getElementById('imageInput').value = '';
+    document.getElementById('imagePreviewContainer').style.display = 'none';
+}
+
+// ========================================
+// メッセージ送信（画像対応に修正）
+// ========================================
+async function sendMessage() {
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    
+    // メッセージまたは画像が必要
+    if (!message && !currentImage) {
+        showError('メッセージまたは画像を入力してください');
+        return;
+    }
+    
+    // 送信ボタンを無効化
+    const sendButton = document.getElementById('sendButton');
+    sendButton.disabled = true;
+    
+    // ユーザーメッセージを表示
+    if (message) {
+        addMessage(message, 'user');
+    }
+    
+    // 画像を表示
+    if (currentImage) {
+        addImageMessage(currentImage, 'user');
+    }
+    
+    // 入力をクリア
+    input.value = '';
+    input.style.height = 'auto';
+    
+    try {
+        const response = await fetch('/api/query', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: message,
+                conversation_id: conversationId,
+                image: currentImage // Base64画像
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            addMessage(data.response, 'assistant');
+            conversationId = data.conversation_id;
+            
+            // 画像をクリア
+            if (currentImage) {
+                clearImage();
+            }
+        } else {
+            showError(data.error || '応答の取得に失敗しました');
+        }
+    } catch (error) {
+        console.error('送信エラー:', error);
+        showError('送信に失敗しました');
+    } finally {
+        sendButton.disabled = false;
+    }
+}
+
+// 画像メッセージを追加
+function addImageMessage(imageSrc, sender) {
+    const messagesDiv = document.getElementById('messages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${sender}`;
+    
+    const img = document.createElement('img');
+    img.src = imageSrc;
+    img.className = 'chat-image';
+    img.alt = 'Uploaded image';
+    
+    // 画像クリックで拡大表示（オプション）
+    img.addEventListener('click', () => {
+        window.open(imageSrc, '_blank');
+    });
+    
+    messageDiv.appendChild(img);
+    messagesDiv.appendChild(messageDiv);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
 // セッションIDを取得または生成
 function getOrCreateSessionId() {
     let sessionId = localStorage.getItem('chat_session_id');

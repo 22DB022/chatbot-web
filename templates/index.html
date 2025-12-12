@@ -17,7 +17,7 @@
         </div>
 
         <div class="sidebar-content">
-            <!-- ★ 会話履歴セクション（新規追加） ★ -->
+            <!-- 会話履歴セクション -->
             <div class="sidebar-section">
                 <h3 class="sidebar-title">会話履歴</h3>
                 <div id="chatHistory" class="chat-history-list">
@@ -119,8 +119,22 @@
 
         <!-- 入力エリア -->
         <div class="input-wrapper">
+            <!-- ★ 画像プレビュー（追加） ★ -->
+            <div id="imagePreviewContainer" class="image-preview-container" style="display: none;">
+                <div class="image-preview-wrapper">
+                    <img id="imagePreview" src="" alt="Preview">
+                    <button id="removeImageBtn" class="remove-image-btn" onclick="clearImage()" title="画像を削除">✕</button>
+                </div>
+            </div>
+            
             <div class="input-container">
                 <div class="input-box">
+                    <!-- ★ 画像アップロードボタン（追加） ★ -->
+                    <input type="file" id="imageInput" accept="image/png,image/jpeg,image/jpg,image/gif,image/webp" style="display: none;" onchange="handleImageSelect(event)">
+                    <button id="imageUploadBtn" class="image-upload-btn" onclick="document.getElementById('imageInput').click()" title="画像をアップロード">
+                        📷
+                    </button>
+                    
                     <textarea 
                         id="questionInput" 
                         placeholder="メッセージを入力してください..."

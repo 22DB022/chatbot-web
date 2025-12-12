@@ -233,6 +233,7 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 - あなたはマルチメディア検定ベーシック対策の教育AIアシスタントです
 - ユーザーは検定合格を目指す学習者です
 - 絶対に提供された学習資料のみを参照して回答します
+- 資料から得た情報のみで応えます
 
 # 制約条件
 - 学習資料に記載されていない内容は「資料に記載がありません」と答える
@@ -366,96 +367,128 @@ def get_init_data():
 
 
 @app.route('/api/query', methods=['POST'])
-@limiter.limit("10 per minute")
 def query():
-    """質問API - RAGロジック"""
+    """ユーザークエリに応答（画像対応版）"""
     try:
         data = request.json
-        question = data.get('question')
-        session_id = data.get('session_id', 'default')
+        query_text = data.get('query', '').strip()
+        conversation_id = data.get('conversation_id')
+        image_base64 = data.get('image')  # Base64画像
         
-        if not question:
-            return jsonify({'error': '質問が空です'}), 400
+        # メッセージまたは画像が必要
+        if not query_text and not image_base64:
+            return jsonify({'error': 'クエリまたは画像が必要です'}), 400
         
-        stats = db.get_stats()
-        if stats['pdf_count'] == 0:
-            return jsonify({
-                'answer': 'まだPDF資料が登録されていません。',
-                'sources': [],
-                'no_data': True
-            })
+        # 会話履歴の取得
+        if conversation_id and conversation_id in conversation_history:
+            messages = conversation_history[conversation_id]
+        else:
+            conversation_id = str(uuid.uuid4())
+            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
         
-        # 会話履歴を取得または初期化
-        if session_id not in conversation_history:
-            conversation_history[session_id] = [
-                {"role": "system", "content": BASE_SYSTEM_PROMPT}
-            ]
-        
-        messages = conversation_history[session_id]
-        
-        # 1. 質問をベクトル化
-        query_response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=question
-        )
-        query_embedding = query_response.data[0].embedding
-        
-        # 2. ベクトル検索
-        relevant_chunks = db.vector_search(query_embedding, top_k=5)
-        
-        if not relevant_chunks:
-            return jsonify({
-                'answer': '関連する情報が資料に見つかりませんでした。',
-                'sources': []
-            })
-        
-        # 3. コンテキスト構築
-        context = "# 関連する学習資料:\n\n"
-        sources = []
-        
-        for i, chunk in enumerate(relevant_chunks, 1):
-            context += f"【資料{i}: {chunk['filename']} ページ{chunk['page']}】\n"
-            context += f"{chunk['text']}\n\n"
+        # 画像がある場合
+        if image_base64:
+            # RAG検索（テキストがある場合のみ）
+            context = ""
+            if query_text:
+                results = db.vector_search(query_text, top_k=3)
+                if results:
+                    context_parts = []
+                    for r in results:
+                        context_parts.append(
+                            f"【{r['filename']} - ページ{r['page_number']}】\n{r['chunk_text']}"
+                        )
+                    context = "\n\n".join(context_parts)
             
-            sources.append({
-                'filename': chunk['filename'],
-                'page': chunk['page'],
-                'similarity': round(chunk['similarity'], 3)
+            # GPT-4 Visionのメッセージを構築
+            user_content = []
+            
+            # テキストがあれば追加
+            if query_text:
+                if context:
+                    user_content.append({
+                        "type": "text",
+                        "text": f"参考情報:\n{context}\n\n質問: {query_text}"
+                    })
+                else:
+                    user_content.append({
+                        "type": "text",
+                        "text": query_text
+                    })
+            else:
+                user_content.append({
+                    "type": "text",
+                    "text": "この画像について説明してください。"
+                })
+            
+            # 画像を追加
+            user_content.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": image_base64
+                }
             })
+            
+            messages.append({"role": "user", "content": user_content})
+            
+            # GPT-4 Vision APIを呼び出し
+            response = client.chat.completions.create(
+                model="gpt-4o",  # GPT-4 Visionモデル
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.7
+            )
+            
+            assistant_response = response.choices[0].message.content
+            
+            # 会話履歴に追加（画像は保存しない、テキストのみ）
+            messages.append({"role": "assistant", "content": assistant_response})
         
-        # 4. AIに送信
-        full_message = f"{context}\n# ユーザーの質問:\n{question}\n\n上記の資料のみを使って、必ずページ番号を示しながら回答してください。"
+        else:
+            # 画像なし（従来のRAG検索）
+            results = db.vector_search(query_text, top_k=5)
+            
+            if results:
+                context_parts = []
+                for r in results:
+                    context_parts.append(
+                        f"【{r['filename']} - ページ{r['page_number']}】\n{r['chunk_text']}"
+                    )
+                context = "\n\n".join(context_parts)
+                
+                user_message = f"参考情報:\n{context}\n\n質問: {query_text}"
+            else:
+                user_message = query_text
+            
+            messages.append({"role": "user", "content": user_message})
+            
+            # GPT-4 APIを呼び出し
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.7
+            )
+            
+            assistant_response = response.choices[0].message.content
+            messages.append({"role": "assistant", "content": assistant_response})
         
-        messages.append({"role": "user", "content": full_message})
+        # 会話履歴を保存
+        conversation_history[conversation_id] = messages
         
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=1000
-        )
-        
-        assistant_message = response.choices[0].message.content
-        
-        # 会話履歴を更新
-        messages[-1] = {"role": "user", "content": question}
-        messages.append({"role": "assistant", "content": assistant_message})
-        
-        # 履歴管理
-        if len(messages) > 21:
-            messages = [messages[0]] + messages[-20:]
-        
-        conversation_history[session_id] = messages
+        # 統計情報
+        stats = db.get_stats()
         
         return jsonify({
-            'answer': assistant_message,
-            'sources': sources
+            'response': assistant_response,
+            'conversation_id': conversation_id,
+            'stats': stats
         })
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': f'処理エラー: {str(e)}'}), 500
 
 
 @app.route('/api/reset', methods=['POST'])
