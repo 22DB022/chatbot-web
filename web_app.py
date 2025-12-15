@@ -1,9 +1,8 @@
 """
-マルチメディア学習アプリ（Web版）
-既存のRAGロジックを使用したFlask API
-PostgreSQL/MySQL/SQLite 3種対応
+マルチメディア学習アプリ(Web版)
+高度版ハイブリッド検索 (SudachiPy + TF-IDF)
 """
-from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
+from flask import Flask, request, jsonify, render_template
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from openai import OpenAI
@@ -13,16 +12,30 @@ import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
 import sqlite3
+import uuid
+import re
+from collections import Counter
+from typing import List, Dict
+import math
 
 # 環境変数読み込み
 load_dotenv()
 
-# PyMySQL (MySQL用)
+# PyMySQL
 try:
     import pymysql
     MYSQL_AVAILABLE = True
 except ImportError:
     MYSQL_AVAILABLE = False
+
+# SudachiPy
+try:
+    from sudachipy import tokenizer
+    from sudachipy import dictionary
+    SUDACHI_AVAILABLE = True
+except ImportError:
+    SUDACHI_AVAILABLE = False
+    print("⚠️ SudachiPyが未インストール。簡易版キーワード抽出を使用します。")
 
 # Flaskアプリ初期化
 app = Flask(__name__, 
@@ -41,34 +54,318 @@ limiter = Limiter(
 db = None
 client = None
 conversation_history = {}
+keyword_extractor = None
 
 
-class RAGDatabase:
-    """RAG対応データベース（PostgreSQL/MySQL/SQLite 3種対応）"""
+# ============================================
+# 高度版キーワード抽出
+# ============================================
+
+class AdvancedKeywordExtractor:
+    """SudachiPyによる高度なキーワード抽出"""
     
     def __init__(self):
-        # 環境変数からデータベース設定を取得
-        self.db_url = os.getenv('DATABASE_URL')  # PostgreSQL (Supabase)
-        self.db_name = os.getenv('DB_NAME')       # MySQL (XAMPP)
+        if SUDACHI_AVAILABLE:
+            try:
+                self.tokenizer_obj = dictionary.Dictionary().create()
+                self.mode = tokenizer.Tokenizer.SplitMode.C
+                print("✅ SudachiPy初期化完了")
+                self.enabled = True
+            except Exception as e:
+                print(f"⚠️ SudachiPy初期化失敗: {e}")
+                self.enabled = False
+        else:
+            self.tokenizer_obj = None
+            self.enabled = False
+    
+    def extract_keywords(self, text: str, min_length: int = 2) -> List[str]:
+        """キーワード抽出"""
+        if not self.enabled or not self.tokenizer_obj:
+            return self._fallback_extract(text, min_length)
         
-        # データベースタイプを判定
+        keywords = []
+        
+        try:
+            tokens = self.tokenizer_obj.tokenize(text, self.mode)
+            
+            for token in tokens:
+                pos = token.part_of_speech()[0]
+                pos_detail = token.part_of_speech()[1]
+                surface = token.surface()
+                
+                # 名詞系のみ抽出
+                if pos == '名詞' and pos_detail in ['普通名詞', 'サ変可能', '固有名詞']:
+                    if len(surface) >= min_length:
+                        # 専門用語を優先
+                        if self._is_technical_term(surface) or len(surface) >= 3:
+                            keywords.append(surface)
+            
+            # 重複除去
+            seen = set()
+            unique = []
+            for kw in keywords:
+                if kw not in seen:
+                    seen.add(kw)
+                    unique.append(kw)
+            
+            return unique
+        
+        except Exception as e:
+            print(f"⚠️ 形態素解析エラー: {e}")
+            return self._fallback_extract(text, min_length)
+    
+    def _is_technical_term(self, word: str) -> bool:
+        """専門用語判定"""
+        # カタカナ語
+        if re.match(r'^[ァ-ヶー]+$', word):
+            return True
+        # 英語
+        if re.match(r'^[A-Za-z]+$', word):
+            return True
+        # 専門用語パターン
+        if re.search(r'(方式|プロトコル|システム|技術|暗号)$', word):
+            return True
+        return False
+    
+    def _fallback_extract(self, text: str, min_length: int) -> List[str]:
+        """フォールバック抽出"""
+        keywords = []
+        keywords.extend(re.findall(r'[ァ-ヶー]{3,}', text))
+        keywords.extend(re.findall(r'[A-Za-z]{2,}', text))
+        keywords.extend(re.findall(r'[一-龠]{2,}[ぁ-ん]*', text))
+        return list(set([kw for kw in keywords if len(kw) >= min_length]))
+
+
+def calculate_tfidf_scores(query_keywords: List[str], 
+                          all_chunks: List[Dict],
+                          chunk_idx: int) -> Dict[str, float]:
+    """TF-IDFスコア計算"""
+    if chunk_idx >= len(all_chunks):
+        return {}
+    
+    current_chunk = all_chunks[chunk_idx]
+    chunk_keywords = current_chunk.get('keywords', [])
+    
+    # TF計算
+    keyword_counts = Counter(chunk_keywords)
+    total_keywords = len(chunk_keywords)
+    
+    # IDF計算
+    num_chunks = len(all_chunks)
+    idf_scores = {}
+    
+    for keyword in query_keywords:
+        doc_freq = sum(1 for chunk in all_chunks if keyword in chunk.get('keywords', []))
+        if doc_freq > 0:
+            idf_scores[keyword] = math.log(num_chunks / doc_freq)
+        else:
+            idf_scores[keyword] = 0.0
+    
+    # TF-IDF
+    tfidf_scores = {}
+    for keyword in query_keywords:
+        if keyword in chunk_keywords:
+            tf = keyword_counts[keyword] / total_keywords if total_keywords > 0 else 0
+            idf = idf_scores.get(keyword, 0)
+            tfidf_scores[keyword] = tf * idf
+        else:
+            tfidf_scores[keyword] = 0.0
+    
+    return tfidf_scores
+
+
+def advanced_keyword_match_score(query_keywords: List[str],
+                                 chunk_keywords: List[str],
+                                 tfidf_scores: Dict[str, float]) -> float:
+    """高度なキーワードマッチング"""
+    if not query_keywords:
+        return 0.0
+    
+    query_set = set(query_keywords)
+    chunk_set = set(chunk_keywords)
+    exact_matches = query_set & chunk_set
+    
+    if not exact_matches:
+        return 0.0
+    
+    # マッチ率
+    match_rate = len(exact_matches) / len(query_set)
+    
+    # TF-IDF重み付け
+    tfidf_weight = sum(tfidf_scores.get(kw, 0) for kw in exact_matches)
+    max_possible_tfidf = sum(tfidf_scores.get(kw, 0) for kw in query_set)
+    
+    if max_possible_tfidf > 0:
+        tfidf_ratio = tfidf_weight / max_possible_tfidf
+    else:
+        tfidf_ratio = 0
+    
+    # 統合: 60% マッチ率 + 40% TF-IDF
+    final_score = (0.6 * match_rate) + (0.4 * tfidf_ratio)
+    return min(final_score, 1.0)
+
+
+def extract_context_from_history(messages: List[Dict], max_turns: int = 2) -> str:
+    """会話履歴から文脈を抽出"""
+    context_parts = []
+    
+    # 最後のN個のユーザーメッセージを取得
+    user_messages = [m for m in messages if m['role'] == 'user']
+    recent_messages = user_messages[-max_turns:] if len(user_messages) > 0 else []
+    
+    for msg in recent_messages:
+        content = msg['content']
+        # システムプロンプトの注釈を除去
+        if "(注意:" in content:
+            content = content.split("(注意:")[0]
+        if "以下は学習資料からの抜粋です" in content:
+            content = content.split("以下は学習資料からの抜粋です")[0]
+        if "質問:" in content:
+            content = content.split("質問:")[-1]
+        
+        context_parts.append(content.strip())
+    
+    return " ".join(context_parts)
+
+
+def expand_query_with_context(query: str, context: str, extractor) -> List[str]:
+    """文脈を考慮してクエリを拡張"""
+    # 現在のクエリからキーワード抽出
+    query_keywords = extractor.extract_keywords(query)
+    
+    # 文脈からもキーワード抽出
+    context_keywords = extractor.extract_keywords(context)
+    
+    # 統合（重複除去、順序保持）
+    all_keywords = []
+    seen = set()
+    
+    # クエリのキーワードを優先
+    for kw in query_keywords:
+        if kw not in seen:
+            all_keywords.append(kw)
+            seen.add(kw)
+    
+    # 文脈のキーワードを追加（最大3個まで）
+    for kw in context_keywords[:3]:
+        if kw not in seen:
+            all_keywords.append(kw)
+            seen.add(kw)
+    
+    return all_keywords
+
+
+def advanced_hybrid_search(query: str,
+                          vector_results: List[Dict],
+                          alpha: float = 0.7,
+                          context: str = "") -> List[Dict]:
+    """高度版ハイブリッド検索（文脈考慮版）"""
+    global keyword_extractor
+    
+    # 文脈を考慮したキーワード抽出
+    if context:
+        query_keywords = expand_query_with_context(query, context, keyword_extractor)
+        print(f"   📌 抽出キーワード: {query_keywords}")
+        if len(context) > 50:
+            print(f"   📝 文脈考慮: {context[:50]}...")
+        else:
+            print(f"   📝 文脈考慮: {context}")
+    else:
+        query_keywords = keyword_extractor.extract_keywords(query)
+        print(f"   📌 抽出キーワード: {query_keywords}")
+    
+    if not query_keywords:
+        print("   ⚠️ キーワード抽出失敗、ベクトル検索のみ")
+        # キーワードスコアをデフォルト値で設定
+        for result in vector_results:
+            result['keyword_score'] = 0.0
+            result['hybrid_score'] = result['similarity']  # ベクトルスコアのみ
+            result['tfidf'] = 0.0
+        return vector_results
+    
+    # 各チャンクからキーワード抽出
+    all_chunks_with_keywords = []
+    for result in vector_results:
+        chunk_keywords = keyword_extractor.extract_keywords(result['text'])
+        all_chunks_with_keywords.append({
+            'keywords': chunk_keywords,
+            'text': result['text']
+        })
+    
+    # スコア計算
+    for idx, result in enumerate(vector_results):
+        tfidf_scores = calculate_tfidf_scores(
+            query_keywords,
+            all_chunks_with_keywords,
+            idx
+        )
+        
+        chunk_keywords = all_chunks_with_keywords[idx]['keywords']
+        keyword_score = advanced_keyword_match_score(
+            query_keywords,
+            chunk_keywords,
+            tfidf_scores
+        )
+        
+        vector_score = result['similarity']
+        hybrid_score = (alpha * vector_score) + ((1 - alpha) * keyword_score)
+        
+        result['keyword_score'] = keyword_score
+        result['hybrid_score'] = hybrid_score
+        result['tfidf'] = sum(tfidf_scores.values())
+    
+    vector_results.sort(key=lambda x: x['hybrid_score'], reverse=True)
+    return vector_results
+
+
+def clean_text(text):
+    """テキストクリーニング"""
+    text = re.sub(r'[•·．]+', '', text)
+    text = re.sub(r'([^\w\s])\1{3,}', '', text)
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        if re.match(r'^[^\w\s]+$', line.strip()):
+            continue
+        if len(line.strip()) > 0 and not re.search(r'[ぁ-んァ-ヶー一-龠a-zA-Z0-9]', line):
+            continue
+        cleaned_lines.append(line)
+    
+    text = '\n'.join(cleaned_lines)
+    text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+    text = re.sub(r' +', ' ', text)
+    return text.strip()
+
+
+# ============================================
+# データベースクラス（変更なし）
+# ============================================
+
+class RAGDatabase:
+    """RAG対応データベース"""
+    
+    def __init__(self):
+        self.db_url = os.getenv('DATABASE_URL')
+        self.db_name = os.getenv('DB_NAME')
+        
         if self.db_url:
-            # PostgreSQL (Supabase) - 本番環境
             print("✅ Supabase PostgreSQL接続")
             self.db_type = 'postgresql'
         elif self.db_name and MYSQL_AVAILABLE:
-            # MySQL (XAMPP) - ローカル開発
             self.db_config = {
                 'host': os.getenv('DB_HOST', 'localhost'),
                 'user': os.getenv('DB_USER', 'root'),
                 'password': os.getenv('DB_PASSWORD', ''),
                 'database': self.db_name,
-                'charset': 'utf8mb4'
+                'charset': 'utf8mb4',
+                'use_unicode': True,
+                'collation': 'utf8mb4_unicode_ci',
+                'init_command': "SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci"
             }
             print(f"✅ MySQL接続設定完了: {self.db_name}")
             self.db_type = 'mysql'
         else:
-            # SQLite - フォールバック
             self.db_path = "rag_study_data.db"
             print(f"⚠️ SQLiteモード: {self.db_path}")
             self.db_type = 'sqlite'
@@ -79,13 +376,17 @@ class RAGDatabase:
             import psycopg2
             return psycopg2.connect(self.db_url)
         elif self.db_type == 'mysql':
-            return pymysql.connect(**self.db_config)
-        else:  # sqlite
-            import sqlite3
+            conn = pymysql.connect(**self.db_config)
+            with conn.cursor() as cursor:
+                cursor.execute("SET NAMES utf8mb4")
+                cursor.execute("SET CHARACTER SET utf8mb4")
+                cursor.execute("SET character_set_connection=utf8mb4")
+            return conn
+        else:
             return sqlite3.connect(self.db_path)
     
     def vector_search(self, query_embedding, top_k=5):
-        """ベクトル検索（コサイン類似度）"""
+        """ベクトル検索"""
         conn = self.get_connection()
         
         try:
@@ -101,7 +402,7 @@ class RAGDatabase:
                     SELECT filename, chunk_text, embedding, page_number 
                     FROM pdf_contents
                 """)
-            else:  # sqlite
+            else:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -115,13 +416,11 @@ class RAGDatabase:
             if not results:
                 return []
             
-            # コサイン類似度を計算
             query_vec = np.array(query_embedding)
             similarities = []
             
             for row in results:
                 try:
-                    # データベースタイプに応じて列にアクセス
                     if self.db_type == 'postgresql':
                         chunk_embedding = json.loads(row[2])
                         filename = row[0]
@@ -132,15 +431,13 @@ class RAGDatabase:
                         filename = row['filename']
                         chunk_text = row['chunk_text']
                         page_number = row['page_number']
-                    else:  # sqlite
+                    else:
                         chunk_embedding = json.loads(row['embedding'])
                         filename = row['filename']
                         chunk_text = row['chunk_text']
                         page_number = row['page_number']
                     
                     chunk_vec = np.array(chunk_embedding)
-                    
-                    # コサイン類似度
                     similarity = np.dot(query_vec, chunk_vec) / (
                         np.linalg.norm(query_vec) * np.linalg.norm(chunk_vec)
                     )
@@ -154,9 +451,7 @@ class RAGDatabase:
                 except Exception as e:
                     continue
             
-            # 類似度順にソート
             similarities.sort(key=lambda x: x['similarity'], reverse=True)
-            
             return similarities[:top_k]
             
         finally:
@@ -184,7 +479,7 @@ class RAGDatabase:
                     ORDER BY added_date DESC
                 """)
                 results = [dict(row) for row in cursor.fetchall()]
-            else:  # sqlite
+            else:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -206,24 +501,21 @@ class RAGDatabase:
         
         try:
             cursor = conn.cursor()
-        
             cursor.execute("""
-            SELECT 
-                COUNT(*) as pdf_count,
-                COALESCE(SUM(page_count), 0) as total_pages,
-                COALESCE(SUM(total_chunks), 0) as total_chunks
-            FROM pdf_metadata
-         """)
-        
+                SELECT 
+                    COUNT(*) as pdf_count,
+                    COALESCE(SUM(page_count), 0) as total_pages,
+                    COALESCE(SUM(total_chunks), 0) as total_chunks
+                FROM pdf_metadata
+            """)
             result = cursor.fetchone()
             cursor.close()
-        
-         # 全てのDBタイプでタプルが返るので統一処理
+            
             return {
-            'pdf_count': result[0],
-            'total_pages': result[1],
-            'total_chunks': result[2]
-         }
+                'pdf_count': result[0],
+                'total_pages': result[1],
+                'total_chunks': result[2]
+            }
             
         finally:
             conn.close()
@@ -238,18 +530,11 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 # 制約条件
 - 学習資料に記載されていない内容は「資料に記載がありません」と答える
 - 資料に基づかない推測や創作は禁止
-- 親しみやすく励ます口調（〜だよ、〜してみよう、よくできたね）
+- 親しみやすく励ます口調(〜だよ、〜してみよう、よくできたね)
 - 回答は400文字以内を目安に簡潔にまとめる
 - 必ず参照した資料のページ番号を示す
 - 検定に無関係な内容には丁寧に断る
-
-# 画像表示について
-ユーザーが以下のような要求をした場合、該当ページの画像を表示する：
-- 「図を見せて」「画像を表示して」
-- 「図XX」「図表」「イラスト」などの言及
-- 「視覚的に見たい」「見せてほしい」
-
-対応方法: [IMAGE:ファイル名|ページ番号] の形式で指定
+- 必ず資料から基づいて回答する
 
 # 対応パターン
 
@@ -257,66 +542,49 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 1. 資料の内容を基に明確に説明する
 2. 具体例を1〜2個挙げる
 3. ページ番号を明記する
-4. 軽く「理解できたかな？」と確認
+4. 軽く「理解できたかな?」と確認
 5. 資料からの情報のみで回答
+6. 専門用語の解説を頼まれた場合は資料でよく使われている単語の解説をしてください
 
-## パターン2: ユーザーが理解を示した場合（★重要★）
-ユーザーが以下のような発言をした場合、**必ず理解度確認の問題を出題する**：
-
-### 理解を示すキーワード・フレーズ：
+## パターン2: ユーザーが理解を示した場合(★重要★)
+ユーザーが以下のような発言をした場合、**必ず理解度確認の問題を出題する**:
 - 「分かった」「わかった」「理解した」
-- 「なるほど」「そういうことか」「そうなんだ」
-- 「分かりました」「理解できました」
+- 「なるほど」「そういうことか」
 - 「OK」「了解」「大丈夫」
-- 「簡単だね」「覚えた」
-- 「ありがとう」（説明の後）
 
-### 対応手順：
-1. まず理解を認める（「よし！」「いいね！」）
-2. **即座に**「じゃあ、本当に理解できたか確認してみよう！」と言う
-3. **必ず問題を1問出題する**（3択問題）
+### 対応手順:
+1. まず理解を認める(「よし!」「いいね!」)
+2. **即座に**「じゃあ、本当に理解できたか確認してみよう!」と言う
+3. **必ず問題を1問出題する**(3択問題)
 4. ユーザーの回答を待つ
 
 ## パターン3: 問題・演習を求められた場合
-1. 学習内容に沿った選択式問題を1問出題（A、B、Cの3択）
+1. 学習内容に沿った選択式問題を1問出題(A、B、Cの3択)
 2. ユーザーの回答を待つ
-3. 回答後、以下の対応：
+3. 回答後、以下の対応:
    - **正解の場合**: 褒めて、解説を追加し、次の学習を提案
-   - **不正解の場合**: 否定せず「惜しい！」と励まし、ヒントを出して再挑戦を促す
-4. 資料からの内容で問題を作成
-
-## パターン4: ヒントを求められた場合
-1. **1回目**: 概念的なヒント（どの分野に関係するか）
-2. **2回目**: より具体的なヒント（選択肢の絞り込み）
-3. **3回目**: ほぼ答えに近い情報（キーワードを示す）
-
-## パターン5: 初回接触・挨拶
-- 簡潔に挨拶
-- 「何を学習したい？」と聞く
-- 選択肢は出さない（ユーザーの自由な質問を促す）
+   - **不正解の場合**: 否定せず「惜しい!」と励まし、ヒントを出して再挑戦を促す
 
 # 禁止事項
 - 資料外の情報を創作する
 - ユーザーが理解を示したのに問題を出さない
 - 間違いを責める口調
 - 連続して複数の問題を出す
-- 長すぎる説明（400文字を大幅に超える）
+- 長すぎる説明(400文字を大幅に超える)
 """
 
 
 def initialize():
     """アプリケーション初期化"""
-    global db, client
+    global db, client, keyword_extractor
     
-    # OpenAI API初期化
     api_key = os.getenv('OPENAI_API_KEY')
     if not api_key:
         raise Exception("OPENAI_API_KEYが設定されていません")
     
     client = OpenAI(api_key=api_key)
-    
-    # データベース初期化（自動判定）
     db = RAGDatabase()
+    keyword_extractor = AdvancedKeywordExtractor()
     
     if db.db_type == 'postgresql':
         print(f"✅ RAGデータベース初期化完了 (PostgreSQL - Supabase)")
@@ -344,6 +612,7 @@ def health():
         return jsonify({
             'status': 'ok',
             'database': db.db_type.upper(),
+            'sudachi': SUDACHI_AVAILABLE,
             'stats': stats
         })
     except Exception as e:
@@ -360,7 +629,8 @@ def get_init_data():
         return jsonify({
             'stats': stats,
             'pdf_list': pdf_list,
-            'database_type': db.db_type.upper()
+            'database_type': db.db_type.upper(),
+            'sudachi_enabled': SUDACHI_AVAILABLE
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -368,110 +638,85 @@ def get_init_data():
 
 @app.route('/api/query', methods=['POST'])
 def query():
-    """ユーザークエリに応答（画像対応版）"""
+    """ユーザークエリに応答(高度版ハイブリッド検索)"""
     try:
         data = request.json
         query_text = data.get('query', '').strip()
         conversation_id = data.get('conversation_id')
-        image_base64 = data.get('image')  # Base64画像
         
-        # メッセージまたは画像が必要
-        if not query_text and not image_base64:
-            return jsonify({'error': 'クエリまたは画像が必要です'}), 400
+        if not query_text:
+            return jsonify({'error': 'クエリが必要です'}), 400
         
         # 会話履歴の取得
         if conversation_id and conversation_id in conversation_history:
             messages = conversation_history[conversation_id]
         else:
             conversation_id = str(uuid.uuid4())
-            messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+            messages = [{"role": "system", "content": BASE_SYSTEM_PROMPT}]
         
-        # 画像がある場合
-        if image_base64:
-            # RAG検索（テキストがある場合のみ）
-            context = ""
-            if query_text:
-                results = db.vector_search(query_text, top_k=3)
-                if results:
-                    context_parts = []
-                    for r in results:
-                        context_parts.append(
-                            f"【{r['filename']} - ページ{r['page_number']}】\n{r['chunk_text']}"
-                        )
-                    context = "\n\n".join(context_parts)
-            
-            # GPT-4 Visionのメッセージを構築
-            user_content = []
-            
-            # テキストがあれば追加
-            if query_text:
-                if context:
-                    user_content.append({
-                        "type": "text",
-                        "text": f"参考情報:\n{context}\n\n質問: {query_text}"
-                    })
-                else:
-                    user_content.append({
-                        "type": "text",
-                        "text": query_text
-                    })
-            else:
-                user_content.append({
-                    "type": "text",
-                    "text": "この画像について説明してください。"
-                })
-            
-            # 画像を追加
-            user_content.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": image_base64
-                }
-            })
-            
-            messages.append({"role": "user", "content": user_content})
-            
-            # GPT-4 Vision APIを呼び出し
-            response = client.chat.completions.create(
-                model="gpt-4o",  # GPT-4 Visionモデル
-                messages=messages,
-                max_tokens=2000,
-                temperature=0.7
-            )
-            
-            assistant_response = response.choices[0].message.content
-            
-            # 会話履歴に追加（画像は保存しない、テキストのみ）
-            messages.append({"role": "assistant", "content": assistant_response})
+        # RAG検索
+        print(f"\n📝 ユーザークエリ: {query_text}")
+        query_embedding = create_embedding(query_text)
+        results = db.vector_search(query_embedding, top_k=10)
         
-        else:
-            # 画像なし（従来のRAG検索）
-            results = db.vector_search(query_text, top_k=5)
+        # デバッグログ
+        print(f"🔍 ベクトル検索結果: {len(results)}件")
+        for i, r in enumerate(results[:5]):
+            print(f"  [{i+1}] ページ{r['page']}, 類似度: {r['similarity']:.4f}")
+        
+        if results:
+            # 会話履歴から文脈を抽出
+            context = extract_context_from_history(messages, max_turns=2)
             
-            if results:
+            # 高度版ハイブリッド検索を適用（文脈考慮）
+            results = advanced_hybrid_search(query_text, results, alpha=0.7, context=context)
+            results = results[:5]
+            
+            # デバッグログ
+            print(f"\n🎯 高度版ハイブリッド検索結果:")
+            for i, r in enumerate(results):
+                print(f"  [{i+1}] ページ{r['page']}")
+                print(f"      ベクトル: {r['similarity']:.4f}")
+                print(f"      キーワード: {r.get('keyword_score', 0.0):.4f}")
+                print(f"      TF-IDF: {r.get('tfidf', 0.0):.4f}")
+                print(f"      統合: {r.get('hybrid_score', r['similarity']):.4f}")
+            
+            # 統合スコアでフィルタリング
+            relevant_results = [r for r in results if r.get('hybrid_score', r['similarity']) > 0.5]
+            
+            if relevant_results:
+                print(f"✅ 関連性の高い結果: {len(relevant_results)}件\n")
                 context_parts = []
-                for r in results:
+                for r in relevant_results:
                     context_parts.append(
-                        f"【{r['filename']} - ページ{r['page_number']}】\n{r['chunk_text']}"
+                        f"【{r['filename']} - ページ{r['page']}】\n{r['text']}"
                     )
                 context = "\n\n".join(context_parts)
                 
-                user_message = f"参考情報:\n{context}\n\n質問: {query_text}"
+                user_message = f"""以下は学習資料からの抜粋です。この情報のみを使って回答してください:
+
+{context}
+
+質問: {query_text}"""
             else:
-                user_message = query_text
-            
-            messages.append({"role": "user", "content": user_message})
-            
-            # GPT-4 APIを呼び出し
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=messages,
-                max_tokens=2000,
-                temperature=0.7
-            )
-            
-            assistant_response = response.choices[0].message.content
-            messages.append({"role": "assistant", "content": assistant_response})
+                print("⚠️ 関連性の高い結果なし(統合スコア<0.5)\n")
+                user_message = f"質問: {query_text}\n\n(注意: 資料から関連情報が見つかりませんでした。資料に基づいて回答できない場合はその旨を伝えてください)"
+        else:
+            print("⚠️ 検索結果なし\n")
+            user_message = f"質問: {query_text}\n\n(注意: 資料から情報が見つかりませんでした。資料に基づいて回答できない場合はその旨を伝えてください)"
+        
+        messages.append({"role": "user", "content": user_message})
+        
+        # GPT-4 APIを呼び出し
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=2000,
+            temperature=0.7
+        )
+        
+        assistant_response = response.choices[0].message.content
+        messages.append({"role": "assistant", "content": assistant_response})
         
         # 会話履歴を保存
         conversation_history[conversation_id] = messages
@@ -508,7 +753,7 @@ def reset_conversation():
 
 @app.route('/api/upload-pdf', methods=['POST'])
 def upload_pdf():
-    """PDFアップロードと登録（AWS Lambda経由）"""
+    """PDFアップロードと登録"""
     try:
         if 'file' not in request.files:
             return jsonify({'error': 'ファイルが選択されていません'}), 400
@@ -526,89 +771,37 @@ def upload_pdf():
         file.seek(0)
         
         if file_size > 50 * 1024 * 1024:
-            return jsonify({'error': 'ファイルサイズが大きすぎます（最大50MB）'}), 400
+            return jsonify({'error': 'ファイルサイズが大きすぎます(最大50MB)'}), 400
         
         print(f"📤 PDFアップロード開始: {file.filename}")
         
-        # ファイルをBase64エンコード
-        import base64
-        pdf_data = file.read()
-        pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+        import tempfile
         
-        # AWS Lambda URLを取得
-        lambda_url = os.getenv('AWS_LAMBDA_URL')
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            file.save(tmp_file.name)
+            temp_path = tmp_file.name
         
-        if not lambda_url:
-            return jsonify({'error': 'AWS_LAMBDA_URLが設定されていません'}), 500
-        
-        print(f"🚀 AWS Lambdaに送信: {lambda_url}")
-        
-        import requests
-        
-        # Lambda関数を呼び出し
-        response = requests.post(
-            lambda_url,
-            json={
-                'pdf_data': pdf_base64,
-                'filename': file.filename
-            },
-            timeout=600  # 10分タイムアウト
-        )
-        
-        print(f"📨 Lambda応答: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
+        try:
+            result = process_pdf_file(temp_path, file.filename)
             
-            if result.get('success'):
-                return jsonify({
-                    'success': True,
-                    'message': f'"{file.filename}" を登録しました',
-                    'stats': {
-                        'filename': result.get('filename'),
-                        'page_count': result.get('page_count'),
-                        'total_chars': result.get('total_chars'),
-                        'total_chunks': result.get('total_chunks')
-                    }
-                })
-            else:
-                error_msg = result.get('error', '不明なエラー')
-                print(f"❌ Lambda エラー: {error_msg}")
-                return jsonify({'error': f'処理エラー: {error_msg}'}), 500
-        else:
-            error_text = response.text
-            print(f"❌ Lambda HTTPエラー: {error_text}")
-            return jsonify({'error': f'処理エラー: {error_text}'}), 500
+            return jsonify({
+                'success': True,
+                'message': f'"{file.filename}" を登録しました',
+                'stats': result
+            })
         
-    except requests.exceptions.Timeout:
-        print(f"⏰ タイムアウト")
-        return jsonify({'error': '処理がタイムアウトしました。PDFが大きすぎる可能性があります。'}), 504
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'処理エラー: {str(e)}'}), 500
 
 
-@app.route('/api/images/<filename>/<int:page_number>', methods=['GET'])
-def get_page_images(filename, page_number):
-    """特定ページの画像を取得"""
-    try:
-        images = get_images_for_page(filename, page_number)
-        
-        # 画像パスをURLパスに変換
-        for img in images:
-            img['url'] = '/' + img['image_path'].replace('\\', '/')
-        
-        return jsonify({
-            'images': images,
-            'count': len(images)
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
 # ============================================
-# PDF処理関数
+# PDF処理関数（変更なし）
 # ============================================
 
 def process_pdf_file(pdf_path, filename):
@@ -623,15 +816,25 @@ def process_pdf_file(pdf_path, filename):
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, 1):
             text = page.extract_text()
+            
             if text:
                 text = text.strip()
+                text = clean_text(text)
+                
+                print(f"  ページ{i}: {len(text)}文字抽出")
+                
+                if i == 1:
+                    print(f"\n📄 1ページ目の内容(最初の200文字):\n{text[:200]}\n")
+                
                 pages_text.append({'page': i, 'text': text})
                 total_chars += len(text)
+            else:
+                print(f"  ⚠️ ページ{i}: テキストなし")
     
     if not pages_text:
         raise Exception("PDFからテキストを抽出できませんでした")
     
-    print(f"✅ 全{len(pages_text)}ページ抽出完了")
+    print(f"✅ 全{len(pages_text)}ページ抽出完了 (合計{total_chars}文字)")
     
     # 既存データをチェック
     conn = db.get_connection()
@@ -642,26 +845,23 @@ def process_pdf_file(pdf_path, filename):
             cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = %s", (filename,))
         elif db.db_type == 'mysql':
             cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = %s", (filename,))
-        else:  # sqlite
+        else:
             cursor.execute("SELECT COUNT(*) FROM pdf_metadata WHERE filename = ?", (filename,))
         
         exists = cursor.fetchone()[0] > 0
         
         if exists:
+            print(f"⚠️ 既存データを削除: {filename}")
             if db.db_type == 'postgresql':
                 cursor.execute("DELETE FROM pdf_metadata WHERE filename = %s", (filename,))
                 cursor.execute("DELETE FROM pdf_contents WHERE filename = %s", (filename,))
-                cursor.execute("DELETE FROM pdf_images WHERE filename = %s", (filename,))
             elif db.db_type == 'mysql':
                 cursor.execute("DELETE FROM pdf_metadata WHERE filename = %s", (filename,))
                 cursor.execute("DELETE FROM pdf_contents WHERE filename = %s", (filename,))
-                cursor.execute("DELETE FROM pdf_images WHERE filename = %s", (filename,))
-            else:  # sqlite
+            else:
                 cursor.execute("DELETE FROM pdf_metadata WHERE filename = ?", (filename,))
                 cursor.execute("DELETE FROM pdf_contents WHERE filename = ?", (filename,))
-                cursor.execute("DELETE FROM pdf_images WHERE filename = ?", (filename,))
             conn.commit()
-            print(f"⚠️ 既存データを削除: {filename}")
         
     finally:
         cursor.close()
@@ -672,13 +872,24 @@ def process_pdf_file(pdf_path, filename):
     for page_data in pages_text:
         chunks = chunk_text(page_data['text'])
         
+        if page_data['page'] == 1 and len(chunks) > 0:
+            print(f"\n📝 1ページ目の最初のチャンク:\n{chunks[0][:200]}\n")
+        
         for chunk in chunks:
+            chunk = clean_text(chunk)
+            
+            if len(chunk.strip()) < 20:
+                continue
+            
             embedding = create_embedding(chunk)
             all_chunks.append({
                 'page': page_data['page'],
                 'text': chunk,
                 'embedding': embedding
             })
+    
+    if len(all_chunks) == 0:
+        raise Exception("有効なテキストチャンクが生成できませんでした")
     
     print(f"✅ 全{len(all_chunks)}チャンク処理完了")
     
@@ -687,7 +898,6 @@ def process_pdf_file(pdf_path, filename):
     cursor = conn.cursor()
     
     try:
-        # メタデータを挿入
         if db.db_type == 'postgresql':
             cursor.execute("""
                 INSERT INTO pdf_metadata 
@@ -700,14 +910,13 @@ def process_pdf_file(pdf_path, filename):
                 (filename, page_count, total_chars, total_chunks, added_date)
                 VALUES (%s, %s, %s, %s, NOW())
             """, (filename, len(pages_text), total_chars, len(all_chunks)))
-        else:  # sqlite
+        else:
             cursor.execute("""
                 INSERT INTO pdf_metadata 
                 (filename, page_count, total_chars, total_chunks, added_date)
                 VALUES (?, ?, ?, ?, ?)
             """, (filename, len(pages_text), total_chars, len(all_chunks), datetime.now().isoformat()))
         
-        # チャンクを挿入
         for chunk in all_chunks:
             embedding_json = json.dumps(chunk['embedding'])
             
@@ -723,7 +932,7 @@ def process_pdf_file(pdf_path, filename):
                     (filename, page_number, chunk_text, embedding, added_date)
                     VALUES (%s, %s, %s, %s, NOW())
                 """, (filename, chunk['page'], chunk['text'], embedding_json))
-            else:  # sqlite
+            else:
                 cursor.execute("""
                     INSERT INTO pdf_contents 
                     (filename, page_number, chunk_text, embedding, added_date)
@@ -732,14 +941,6 @@ def process_pdf_file(pdf_path, filename):
         
         conn.commit()
         print(f"✅ データベース登録完了: {filename}")
-        
-        # 画像を抽出して保存
-        try:
-            images = extract_images_from_pdf(pdf_path, filename)
-            if images:
-                save_images_to_db(images)
-        except Exception as img_error:
-            print(f"⚠️ 画像処理でエラー（処理は継続）: {img_error}")
         
         return {
             'filename': filename,
@@ -753,172 +954,6 @@ def process_pdf_file(pdf_path, filename):
         raise e
     finally:
         cursor.close()
-        conn.close()
-
-
-def extract_images_from_pdf(pdf_path, filename):
-    """PDFから画像を抽出"""
-    import pdfplumber
-    from PIL import Image
-    import io
-    
-    # 画像保存ディレクトリ
-    images_dir = os.path.join('assets', 'images', 'pdf_images')
-    os.makedirs(images_dir, exist_ok=True)
-    
-    print(f"🖼️ 画像抽出開始: {filename}")
-    
-    extracted_images = []
-    
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
-                # ページ内の画像を抽出
-                if hasattr(page, 'images') and page.images:
-                    for img_index, img_info in enumerate(page.images, 1):
-                        try:
-                            # 画像データを取得
-                            if hasattr(page, 'extract_image'):
-                                # pdfplumber 0.9.0以降
-                                image_obj = page.within_bbox(
-                                    (img_info['x0'], img_info['top'], 
-                                     img_info['x1'], img_info['bottom'])
-                                ).to_image()
-                                
-                                # 画像を保存
-                                base_filename = os.path.splitext(filename)[0]
-                                safe_filename = "".join(c for c in base_filename if c.isalnum() or c in (' ', '-', '_'))
-                                image_filename = f"{safe_filename}_page{page_num}_img{img_index}.png"
-                                image_path = os.path.join(images_dir, image_filename)
-                                
-                                image_obj.save(image_path)
-                                
-                                # 画像情報を記録
-                                extracted_images.append({
-                                    'filename': filename,
-                                    'page_number': page_num,
-                                    'image_path': os.path.join('assets', 'images', 'pdf_images', image_filename),
-                                    'image_index': img_index,
-                                    'width': int(img_info['width']),
-                                    'height': int(img_info['height']),
-                                    'added_date': datetime.now().isoformat()
-                                })
-                                
-                                print(f"  ✓ ページ{page_num} 画像{img_index}を抽出")
-                        except Exception as e:
-                            print(f"  ⚠️ ページ{page_num} 画像{img_index}の抽出失敗: {e}")
-                            continue
-    except Exception as e:
-        print(f"❌ PDF画像抽出エラー: {e}")
-        return []
-    
-    print(f"✅ {len(extracted_images)}個の画像を抽出しました")
-    return extracted_images
-
-
-def save_images_to_db(images):
-    """画像情報をデータベースに保存"""
-    if not images:
-        return
-    
-    conn = db.get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        for img in images:
-            if db.db_type == 'postgresql':
-                cursor.execute("""
-                    INSERT INTO pdf_images 
-                    (filename, page_number, image_path, image_index, width, height, added_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                """, (
-                    img['filename'],
-                    img['page_number'],
-                    img['image_path'],
-                    img['image_index'],
-                    img['width'],
-                    img['height']
-                ))
-            elif db.db_type == 'mysql':
-                cursor.execute("""
-                    INSERT INTO pdf_images 
-                    (filename, page_number, image_path, image_index, width, height, added_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                """, (
-                    img['filename'],
-                    img['page_number'],
-                    img['image_path'],
-                    img['image_index'],
-                    img['width'],
-                    img['height']
-                ))
-            else:  # sqlite
-                cursor.execute("""
-                    INSERT INTO pdf_images 
-                    (filename, page_number, image_path, image_index, width, height, added_date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    img['filename'],
-                    img['page_number'],
-                    img['image_path'],
-                    img['image_index'],
-                    img['width'],
-                    img['height'],
-                    img['added_date']
-                ))
-        
-        conn.commit()
-        print(f"✅ {len(images)}個の画像情報をデータベースに保存")
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ 画像情報の保存エラー: {e}")
-        raise e
-    finally:
-        cursor.close()
-        conn.close()
-
-
-def get_images_for_page(filename, page_number):
-    """特定ページの画像を取得"""
-    conn = db.get_connection()
-    
-    try:
-        if db.db_type == 'postgresql':
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT image_path, image_index, width, height
-                FROM pdf_images
-                WHERE filename = %s AND page_number = %s
-                ORDER BY image_index
-            """, (filename, page_number))
-            
-            columns = ['image_path', 'image_index', 'width', 'height']
-            results = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        elif db.db_type == 'mysql':
-            cursor = conn.cursor(pymysql.cursors.DictCursor)
-            cursor.execute("""
-                SELECT image_path, image_index, width, height
-                FROM pdf_images
-                WHERE filename = %s AND page_number = %s
-                ORDER BY image_index
-            """, (filename, page_number))
-            
-            results = [dict(row) for row in cursor.fetchall()]
-        else:  # sqlite
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT image_path, image_index, width, height
-                FROM pdf_images
-                WHERE filename = ? AND page_number = ?
-                ORDER BY image_index
-            """, (filename, page_number))
-            
-            results = [dict(row) for row in cursor.fetchall()]
-        
-        cursor.close()
-        return results
-    finally:
         conn.close()
 
 
@@ -962,7 +997,7 @@ def create_embedding(text):
 # アプリケーション起動
 # ============================================
 try:
-    print("🚀 RAG学習アプリ起動中...")
+    print("🚀 RAG学習アプリ起動中(高度版ハイブリッド検索)...")
     initialize()
     print("✅ 初期化完了")
 except Exception as e:
