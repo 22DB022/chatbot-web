@@ -5,8 +5,341 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>マルチメディア検定 学習チャット</title>
     <link rel="stylesheet" href="/assets/css/style.css">
+    <style>
+        /* 画像プレビューのサイズ制限 */
+        .image-preview-container {
+            max-height: 200px !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
+            margin-bottom: 10px !important;
+            border-radius: 12px !important;
+            background: #f5f5f5 !important;
+            padding: 10px !important;
+        }
+        
+        .image-preview-wrapper {
+            position: relative !important;
+            max-height: 180px !important;
+            max-width: 100% !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+        
+        .image-preview-wrapper img,
+        #imagePreview {
+            max-height: 180px !important;
+            max-width: 100% !important;
+            width: auto !important;
+            height: auto !important;
+            object-fit: contain !important;
+            border-radius: 8px !important;
+        }
+        
+        .remove-image-btn {
+            position: absolute !important;
+            top: 5px !important;
+            right: 5px !important;
+            background: rgba(255, 255, 255, 0.9) !important;
+            border: none !important;
+            border-radius: 50% !important;
+            width: 24px !important;
+            height: 24px !important;
+            cursor: pointer !important;
+            font-size: 14px !important;
+            line-height: 24px !important;
+            text-align: center !important;
+            color: #666 !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+            z-index: 10 !important;
+        }
+        
+        .remove-image-btn:hover {
+            background: #fff !important;
+            color: #f44336 !important;
+        }
+        
+        /* PDFプレビューを無効化 */
+        .pdf-preview-container,
+        .pdf-viewer,
+        #pdfPreview,
+        #pdfPreviewContainer {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        
+        /* PDF選択モーダル（初回のみ） */
+        .pdf-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            padding: 20px;
+        }
+        
+        .pdf-modal {
+            background: white;
+            border-radius: 20px;
+            max-width: 600px;
+            width: 100%;
+            max-height: 80vh;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .pdf-modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .pdf-modal-header h2 {
+            font-size: 24px;
+            margin: 0 0 10px 0;
+        }
+        
+        .pdf-modal-header p {
+            font-size: 14px;
+            margin: 0;
+            opacity: 0.9;
+        }
+        
+        .pdf-modal-content {
+            padding: 30px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        
+        .pdf-selection-list {
+            display: grid;
+            gap: 15px;
+        }
+        
+        .pdf-selection-item {
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: white;
+        }
+        
+        .pdf-selection-item:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+        
+        .pdf-selection-item.selected {
+            border-color: #667eea;
+            background: #f8f9ff;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+        
+        .pdf-selection-item .pdf-name {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .pdf-selection-item .pdf-info {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .pdf-selection-item.selected .pdf-name::before {
+            content: '✓';
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            background: #667eea;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 20px;
+            font-size: 12px;
+        }
+        
+        .pdf-modal-footer {
+            padding: 20px 30px;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+        }
+        
+        .pdf-modal-footer button {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .pdf-confirm-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .pdf-confirm-btn:hover:not(:disabled) {
+            transform: scale(1.02);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .pdf-confirm-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .pdf-all-btn {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+        
+        .pdf-all-btn:hover {
+            background: #f8f9ff;
+        }
+        
+        .pdf-modal-loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        /* サイドバーのPDF一覧に選択機能を追加 */
+        .pdf-list-item {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        
+        .pdf-list-item:hover {
+            background: #f0f4ff;
+        }
+        
+        .pdf-list-item.selected {
+            background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%);
+            border-left: 3px solid #667eea;
+            padding-left: 9px;
+        }
+        
+        .pdf-list-item .pdf-icon {
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+        
+        .pdf-list-item .pdf-details {
+            flex: 1;
+            min-width: 0;
+        }
+        
+        .pdf-list-item .pdf-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .pdf-list-item.selected .pdf-title {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .pdf-list-item .pdf-meta {
+            font-size: 11px;
+            color: #999;
+            margin-top: 2px;
+        }
+        
+        .pdf-list-item .check-icon {
+            font-size: 16px;
+            color: #667eea;
+            flex-shrink: 0;
+        }
+        
+        /* 全資料モードインジケーター */
+        .all-resources-indicator {
+            padding: 12px;
+            background: linear-gradient(135deg, #66eeaa15 0%, #76ba4215 100%);
+            border-radius: 8px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .all-resources-indicator .icon {
+            font-size: 20px;
+        }
+        
+        .all-resources-indicator .text {
+            flex: 1;
+            font-size: 14px;
+            color: #2d9661;
+            font-weight: 600;
+        }
+        
+        .all-resources-indicator .badge {
+            background: #2d9661;
+            color: white;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+    </style>
 </head>
 <body>
+    <!-- PDF選択モーダル（初回のみ） -->
+    <div id="pdfSelectionModal" class="pdf-modal-overlay" style="display: none;">
+        <div class="pdf-modal">
+            <div class="pdf-modal-header">
+                <h2>📚 学習する科目を選択</h2>
+                <p>登録されているPDFから学習したい科目を選んでください</p>
+            </div>
+            <div class="pdf-modal-content">
+                <div id="pdfSelectionLoading" class="pdf-modal-loading">
+                    読み込み中...
+                </div>
+                <div id="pdfSelectionList" class="pdf-selection-list" style="display: none;">
+                    <!-- JavaScriptで動的に生成 -->
+                </div>
+            </div>
+            <div class="pdf-modal-footer">
+                <button class="pdf-all-btn" onclick="selectAllSubjects()">
+                    全資料から検索
+                </button>
+                <button id="pdfConfirmBtn" class="pdf-confirm-btn" disabled onclick="confirmSubjectSelection()">
+                    この科目で学習開始
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- サイドバー -->
     <div id="sidebar" class="sidebar">
         <div class="sidebar-header">
@@ -23,6 +356,22 @@
                 <div id="chatHistory" class="chat-history-list">
                     <!-- JavaScriptで動的に生成 -->
                 </div>
+            </div>
+
+            <!-- 学習資料セクション -->
+            <div class="sidebar-section">
+                <h3 class="sidebar-title">学習資料 (PDF)</h3>
+                
+                <!-- 全資料モードインジケーター -->
+                <div id="allResourcesIndicator" class="all-resources-indicator" style="display: none;">
+                    <span class="icon">📚</span>
+                    <span class="text">全資料から検索中</span>
+                    <span class="badge">ALL</span>
+                </div>
+                
+                <ul id="pdfList" class="pdf-list">
+                    <li class="pdf-loading">読み込み中...</li>
+                </ul>
             </div>
 
             <!-- 統計情報 -->
@@ -64,14 +413,6 @@
                     </div>
                     <div id="uploadStatus" class="upload-status">アップロード中...</div>
                 </div>
-            </div>
-
-            <!-- PDF一覧 -->
-            <div class="sidebar-section">
-                <h3 class="sidebar-title">登録済みPDF</h3>
-                <ul id="pdfList" class="pdf-list">
-                    <li class="pdf-loading">読み込み中...</li>
-                </ul>
             </div>
         </div>
 
@@ -159,5 +500,331 @@
     <div id="errorMessage" class="error-toast"></div>
 
     <script src="/assets/js/app.js"></script>
+    <script>
+        // PDFプレビューを強制的に非表示にする
+        function disablePdfPreview() {
+            const previewSelectors = [
+                '.pdf-preview-container',
+                '.pdf-viewer',
+                '#pdfPreview',
+                '#pdfPreviewContainer',
+                '[class*="pdf-preview"]',
+                '[id*="pdfPreview"]'
+            ];
+            
+            previewSelectors.forEach(selector => {
+                const elements = document.querySelectorAll(selector);
+                elements.forEach(el => {
+                    el.style.display = 'none';
+                    el.style.visibility = 'hidden';
+                    el.style.position = 'absolute';
+                    el.style.zIndex = '-9999';
+                });
+            });
+        }
+        
+        // ページ読み込み時とDOM変更時に実行
+        window.addEventListener('DOMContentLoaded', disablePdfPreview);
+        setInterval(disablePdfPreview, 1000); // 定期的にチェック
+        
+        // MutationObserverで監視
+        const observer = new MutationObserver(disablePdfPreview);
+        observer.observe(document.body, { 
+            childList: true, 
+            subtree: true 
+        });
+        
+        // handleFileSelectを拡張（PDFアップロード時の処理）
+        const originalHandleFileSelect = window.handleFileSelect;
+        if (typeof originalHandleFileSelect === 'function') {
+            window.handleFileSelect = function(event) {
+                // 元の処理を実行
+                originalHandleFileSelect(event);
+                
+                // プレビューを強制的に非表示
+                setTimeout(() => {
+                    disablePdfPreview();
+                    // チャット入力欄にフォーカス
+                    const input = document.getElementById('questionInput');
+                    if (input) input.focus();
+                }, 100);
+            };
+        }
+        
+        // handleImageSelectを拡張（画像アップロード時の処理）
+        const originalHandleImageSelect = window.handleImageSelect;
+        if (typeof originalHandleImageSelect === 'function') {
+            window.handleImageSelect = function(event) {
+                // 元の処理を実行
+                originalHandleImageSelect(event);
+                
+                // 画像プレビューのサイズを制限
+                setTimeout(() => {
+                    const previewContainer = document.getElementById('imagePreviewContainer');
+                    const previewImg = document.getElementById('imagePreview');
+                    
+                    if (previewContainer) {
+                        previewContainer.style.maxHeight = '200px';
+                        previewContainer.style.overflow = 'hidden';
+                        previewContainer.style.marginBottom = '10px';
+                    }
+                    
+                    if (previewImg) {
+                        previewImg.style.maxHeight = '180px';
+                        previewImg.style.maxWidth = '100%';
+                        previewImg.style.objectFit = 'contain';
+                    }
+                    
+                    // 入力欄にフォーカス
+                    const input = document.getElementById('questionInput');
+                    if (input) input.focus();
+                }, 100);
+            };
+        }
+        
+        // PDF選択機能
+        let selectedPdfForLearning = null;
+        let availablePdfList = [];
+        let hasShownInitialModal = false;
+        
+        // 初回起動時にPDF選択を表示（1回のみ）
+        window.addEventListener('DOMContentLoaded', function() {
+            setTimeout(() => {
+                if (!hasShownInitialModal && !localStorage.getItem('pdf_selection_done')) {
+                    showInitialPdfSelection();
+                    hasShownInitialModal = true;
+                }
+            }, 500);
+        });
+        
+        // 初回PDF選択モーダル
+        function showInitialPdfSelection() {
+            document.getElementById('pdfSelectionModal').style.display = 'flex';
+            loadAvailablePdfs();
+        }
+        
+        // PDF一覧取得
+        async function loadAvailablePdfs() {
+            try {
+                const response = await fetch('/api/init');
+                const data = await response.json();
+                availablePdfList = data.pdf_list || [];
+                
+                document.getElementById('pdfSelectionLoading').style.display = 'none';
+                document.getElementById('pdfSelectionList').style.display = 'grid';
+                
+                renderPdfSelectionList();
+            } catch (error) {
+                console.error('PDF一覧取得エラー:', error);
+                document.getElementById('pdfSelectionLoading').textContent = 'エラーが発生しました';
+            }
+        }
+        
+        // モーダル内のPDF選択リスト
+        function renderPdfSelectionList() {
+            const container = document.getElementById('pdfSelectionList');
+            container.innerHTML = '';
+            
+            if (availablePdfList.length === 0) {
+                container.innerHTML = '<div class="pdf-modal-loading">登録されているPDFがありません</div>';
+                return;
+            }
+            
+            availablePdfList.forEach(pdf => {
+                const item = document.createElement('div');
+                item.className = 'pdf-selection-item';
+                item.onclick = () => selectPdfForLearning(pdf.filename, item);
+                item.innerHTML = `
+                    <div class="pdf-name">${pdf.filename}</div>
+                    <div class="pdf-info">${pdf.page_count}ページ | ${pdf.total_chunks}チャンク</div>
+                `;
+                container.appendChild(item);
+            });
+        }
+        
+        // モーダルでPDF選択
+        function selectPdfForLearning(filename, element) {
+            document.querySelectorAll('.pdf-selection-item').forEach(item => {
+                item.classList.remove('selected');
+            });
+            element.classList.add('selected');
+            
+            selectedPdfForLearning = filename;
+            document.getElementById('pdfConfirmBtn').disabled = false;
+        }
+        
+        // 全資料から検索
+        async function selectAllSubjects() {
+            try {
+                const response = await fetch('/api/clear-pdf-selection', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ conversation_id: conversationId })
+                });
+                
+                if (response.ok) {
+                    selectedPdfForLearning = null;
+                    document.getElementById('pdfSelectionModal').style.display = 'none';
+                    localStorage.setItem('pdf_selection_done', 'true');
+                    updatePdfListDisplay();
+                }
+            } catch (error) {
+                console.error('選択クリアエラー:', error);
+            }
+        }
+        
+        // モーダルで選択確定
+        async function confirmSubjectSelection() {
+            if (!selectedPdfForLearning) return;
+            
+            try {
+                const response = await fetch('/api/select-pdf', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        conversation_id: conversationId,
+                        pdf_name: selectedPdfForLearning
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    conversationId = data.conversation_id;
+                    document.getElementById('pdfSelectionModal').style.display = 'none';
+                    localStorage.setItem('pdf_selection_done', 'true');
+                    updatePdfListDisplay();
+                    console.log('📚 選択完了:', selectedPdfForLearning);
+                } else {
+                    alert(data.error || '選択に失敗しました');
+                }
+            } catch (error) {
+                console.error('PDF選択エラー:', error);
+                alert('エラーが発生しました');
+            }
+        }
+        
+        // サイドバーのPDF一覧からクリックで選択
+        async function selectPdfFromSidebar(filename) {
+            try {
+                // 全資料モードからの切り替え
+                if (selectedPdfForLearning === null && filename) {
+                    const response = await fetch('/api/select-pdf', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            conversation_id: conversationId,
+                            pdf_name: filename
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.success) {
+                        conversationId = data.conversation_id;
+                        selectedPdfForLearning = filename;
+                        updatePdfListDisplay();
+                        console.log('📚 選択:', filename);
+                    }
+                } 
+                // 異なるPDFへの切り替え
+                else if (selectedPdfForLearning !== filename) {
+                    const response = await fetch('/api/select-pdf', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            conversation_id: conversationId,
+                            pdf_name: filename
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    if (data.success) {
+                        selectedPdfForLearning = filename;
+                        updatePdfListDisplay();
+                        console.log('📚 切り替え:', filename);
+                    }
+                }
+                // 同じPDFをクリック → 全資料モードに
+                else {
+                    const response = await fetch('/api/clear-pdf-selection', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ conversation_id: conversationId })
+                    });
+                    
+                    if (response.ok) {
+                        selectedPdfForLearning = null;
+                        updatePdfListDisplay();
+                        console.log('📚 全資料モードに切り替え');
+                    }
+                }
+            } catch (error) {
+                console.error('PDF選択エラー:', error);
+            }
+        }
+        
+        // サイドバーのPDF一覧表示を更新
+        function updatePdfListDisplay() {
+            const pdfListContainer = document.getElementById('pdfList');
+            const allIndicator = document.getElementById('allResourcesIndicator');
+            
+            // 全資料モードインジケーター
+            if (selectedPdfForLearning === null) {
+                allIndicator.style.display = 'flex';
+            } else {
+                allIndicator.style.display = 'none';
+            }
+            
+            // PDF一覧を再レンダリング
+            if (availablePdfList.length === 0) {
+                pdfListContainer.innerHTML = '<li class="pdf-loading">PDFがありません</li>';
+                return;
+            }
+            
+            pdfListContainer.innerHTML = '';
+            availablePdfList.forEach(pdf => {
+                const li = document.createElement('li');
+                li.className = 'pdf-list-item';
+                if (selectedPdfForLearning === pdf.filename) {
+                    li.classList.add('selected');
+                }
+                li.onclick = () => selectPdfFromSidebar(pdf.filename);
+                
+                li.innerHTML = `
+                    <span class="pdf-icon">📄</span>
+                    <div class="pdf-details">
+                        <div class="pdf-title">${pdf.filename}</div>
+                        <div class="pdf-meta">${pdf.page_count}ページ</div>
+                    </div>
+                    ${selectedPdfForLearning === pdf.filename ? '<span class="check-icon">✓</span>' : ''}
+                `;
+                pdfListContainer.appendChild(li);
+            });
+        }
+        
+        // 既存のinitialize()関数を拡張
+        const originalInitialize = window.initialize;
+        if (typeof originalInitialize === 'function') {
+            window.initialize = async function() {
+                await originalInitialize();
+                // 初期化後にPDF一覧を更新
+                const response = await fetch('/api/init');
+                const data = await response.json();
+                availablePdfList = data.pdf_list || [];
+                updatePdfListDisplay();
+            };
+        }
+        
+        // リセット時の動作
+        const originalResetConversation = window.resetConversation;
+        window.resetConversation = function() {
+            if (typeof originalResetConversation === 'function') {
+                originalResetConversation();
+            }
+            // リセット時はPDF選択を維持
+            updatePdfListDisplay();
+        };
+    </script>
 </body>
+
 </html>

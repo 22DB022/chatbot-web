@@ -753,3 +753,32 @@ async function uploadPDF(file) {
         }, 3000);
     }
 }
+// PDF選択API呼び出し
+async function confirmSelection() {
+    const response = await fetch('/api/select-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            conversation_id: yourConversationId,
+            pdf_name: selectedPdfName
+        })
+    });
+    
+    const data = await response.json();
+    if (data.success) {
+        alert('選択しました: ' + data.selected_pdf);
+    }
+}
+// 画像データを取得
+const imagePreview = document.getElementById('imagePreview');
+let imageData = null;
+if (imagePreview && imagePreview.src && imagePreview.src.startsWith('data:image')) {
+    imageData = imagePreview.src.split(',')[1];
+}
+
+// 送信時にimageを追加
+body: JSON.stringify({
+    query: query,
+    conversation_id: conversationId,
+    image: imageData  // ← この行を追加
+})

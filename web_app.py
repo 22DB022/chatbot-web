@@ -54,6 +54,7 @@ limiter = Limiter(
 db = None
 client = None
 conversation_history = {}
+selected_pdfs = {}  # セッションIDごとに選択されたPDFを管理
 keyword_extractor = None
 
 
@@ -205,6 +206,52 @@ def advanced_keyword_match_score(query_keywords: List[str],
     return min(final_score, 1.0)
 
 
+def is_quiz_answer(query: str, messages: List[Dict]) -> bool:
+    """
+    クエリが問題への回答かどうかを判定
+    
+    Args:
+        query: ユーザーのクエリ
+        messages: 会話履歴
+    
+    Returns:
+        問題への回答の場合True
+    """
+    # 単一文字または短い回答かチェック
+    query_clean = query.strip().upper()
+    if query_clean not in ['A', 'B', 'C', '1', '2', '3']:
+        return False
+    
+    # 最後のアシスタントメッセージを確認
+    assistant_messages = [m for m in messages if m['role'] == 'assistant']
+    if not assistant_messages:
+        return False
+    
+    last_message = assistant_messages[-1]['content']
+    
+    # 選択肢パターンを検出
+    # 例: "A) ...", "B) ...", "C) ..."
+    choice_patterns = [
+        r'[ABC]\)',  # A), B), C)
+        r'[123]\)',  # 1), 2), 3)
+        r'[ABC]\.', # A., B., C.
+        r'\*\*[ABC]\)',  # **A)**, **B)**, **C)**
+    ]
+    
+    import re
+    for pattern in choice_patterns:
+        if re.search(pattern, last_message):
+            return True
+    
+    # 「どれが正しい」「選んで」などの問題文パターン
+    quiz_keywords = ['どれが正しい', '選んで', 'どれでしょう', '次のうち', '挑戦してみて']
+    for keyword in quiz_keywords:
+        if keyword in last_message:
+            return True
+    
+    return False
+
+
 def extract_context_from_history(messages: List[Dict], max_turns: int = 2) -> str:
     """会話履歴から文脈を抽出"""
     context_parts = []
@@ -285,12 +332,19 @@ def advanced_hybrid_search(query: str,
     
     # 各チャンクからキーワード抽出
     all_chunks_with_keywords = []
-    for result in vector_results:
+    for i, result in enumerate(vector_results):
         chunk_keywords = keyword_extractor.extract_keywords(result['text'])
         all_chunks_with_keywords.append({
             'keywords': chunk_keywords,
             'text': result['text']
         })
+        
+        # デバッグ: 最初のチャンクの詳細を表示
+        if i == 0:
+            print(f"\n   🔍 デバッグ - チャンク[1]の詳細:")
+            print(f"      テキスト: {result['text'][:100]}...")
+            print(f"      抽出キーワード: {chunk_keywords[:10]}")
+            print(f"      クエリとの共通: {set(query_keywords) & set(chunk_keywords)}")
     
     # スコア計算
     for idx, result in enumerate(vector_results):
@@ -385,30 +439,51 @@ class RAGDatabase:
         else:
             return sqlite3.connect(self.db_path)
     
-    def vector_search(self, query_embedding, top_k=5):
-        """ベクトル検索"""
+    def vector_search(self, query_embedding, top_k=5, filtered_filename=None):
+        """ベクトル検索（PDF指定可能）"""
         conn = self.get_connection()
         
         try:
             if self.db_type == 'postgresql':
                 cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT filename, chunk_text, embedding, page_number 
-                    FROM pdf_contents
-                """)
+                if filtered_filename:
+                    cursor.execute("""
+                        SELECT filename, chunk_text, embedding, page_number 
+                        FROM pdf_contents
+                        WHERE filename = %s
+                    """, (filtered_filename,))
+                else:
+                    cursor.execute("""
+                        SELECT filename, chunk_text, embedding, page_number 
+                        FROM pdf_contents
+                    """)
             elif self.db_type == 'mysql':
                 cursor = conn.cursor(pymysql.cursors.DictCursor)
-                cursor.execute("""
-                    SELECT filename, chunk_text, embedding, page_number 
-                    FROM pdf_contents
-                """)
+                if filtered_filename:
+                    cursor.execute("""
+                        SELECT filename, chunk_text, embedding, page_number 
+                        FROM pdf_contents
+                        WHERE filename = %s
+                    """, (filtered_filename,))
+                else:
+                    cursor.execute("""
+                        SELECT filename, chunk_text, embedding, page_number 
+                        FROM pdf_contents
+                    """)
             else:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT filename, chunk_text, embedding, page_number 
-                    FROM pdf_contents
-                """)
+                if filtered_filename:
+                    cursor.execute("""
+                        SELECT filename, chunk_text, embedding, page_number 
+                        FROM pdf_contents
+                        WHERE filename = ?
+                    """, (filtered_filename,))
+                else:
+                    cursor.execute("""
+                        SELECT filename, chunk_text, embedding, page_number 
+                        FROM pdf_contents
+                    """)
             
             results = cursor.fetchall()
             cursor.close()
@@ -524,27 +599,82 @@ class RAGDatabase:
 BASE_SYSTEM_PROMPT = """# 前提条件
 - あなたはマルチメディア検定ベーシック対策の教育AIアシスタントです
 - ユーザーは検定合格を目指す学習者です
-- 絶対に提供された学習資料のみを参照して回答します
-- 資料から得た情報のみで応えます
+- 提供された学習資料を最大限活用して回答します
+- 資料から得られる情報を積極的に提供します
+
+# 画像が提供された場合の特別対応 (★重要★)
+ユーザーが画像をアップロードした場合は、以下の手順で詳細に分析して回答する:
+
+1. **画像の内容を詳細に観察**
+   - テキストが含まれる場合は全て読み取る
+   - 図表、グラフ、イラストの意味を理解する
+   - レイアウトや構造を把握する
+
+2. **画像の説明を構造化して提示**
+   - 【画像の説明】セクションを作成
+   - 主要なポイントを箇条書きで整理
+   - 具体的な内容を引用しながら説明
+
+3. **関連知識の補足**
+   - 【関連知識】セクションを作成
+   - 画像に出てきた用語や概念を補足説明
+   - 学習資料がある場合はその内容も活用
+
+4. **理解度確認**
+   - 画像の内容について質問があるか確認
+   - 必要に応じて問題を出題
+
+**画像解説の例**:
+```
+この画像は、マルチメディア検定の「アナログからデジタルへ」の分野に関する内容を示しています。
+
+【画像の説明】
+• アナログからディジタルへの移行:
+  - 1970年代から民生品のメディアコンテンツや媒体はアナログからディジタルへと移行
+  - 例: 音楽メディアはアナログレコードやカセットテープからCDへと進化し、その後MD、DAT、半導体メモリへと変化
+
+• アナログ時代の課題:
+  - アナログメディアは精密な取扱いと時間が必要
+  - 再生中の振動、媒体の大きさ、曲の選択、データの複製には注意が必要
+  - 複製を繰り返すとデータは劣化する
+
+• ディジタル化の利点:
+  - ディジタル化により、アナログ時代の不便さが解決
+  - CDは耐久性に優れ、小型化による携帯性、インターネットによる不要な配信、簡便な選曲、高速な複製等、多くの利点が生まれた
+
+【関連知識】
+• デジタルとアナログの違い: ...
+• マルチメディアにおけるデジタル化の重要性: ...
+```
 
 # 制約条件
-- 学習資料に記載されていない内容は「資料に記載がありません」と答える
-- 資料に基づかない推測や創作は禁止
+- 資料に基づいた回答を心がける（資料が参考程度でもOK）
+- 抽象的な質問の場合は、資料から関連する情報を整理して提示する
 - 親しみやすく励ます口調(〜だよ、〜してみよう、よくできたね)
-- 回答は400文字以内を目安に簡潔にまとめる
-- 必ず参照した資料のページ番号を示す
+- 回答は適度な長さで分かりやすくまとめる
+- 可能な限りページ番号を示す
 - 検定に無関係な内容には丁寧に断る
-- 必ず資料から基づいて回答する
 
 # 対応パターン
 
-## パターン1: 知識・説明を求められた場合
+## パターン0: 画像が提供された場合 (★最優先★)
+1. 画像の内容を詳細に読み取り、構造化して説明
+2. 【画像の説明】と【関連知識】のセクションに分ける
+3. 箇条書きで分かりやすく整理
+4. 具体的な内容を引用しながら解説
+5. 理解度を確認し、必要に応じて問題を出題
+
+## パターン1: 具体的な知識・説明を求められた場合
 1. 資料の内容を基に明確に説明する
 2. 具体例を1〜2個挙げる
 3. ページ番号を明記する
 4. 軽く「理解できたかな?」と確認
-5. 資料からの情報のみで回答
-6. 専門用語の解説を頼まれた場合は資料でよく使われている単語の解説をしてください
+
+## パターン1.5: 抽象的な質問（「専門用語を教えて」など）
+1. 資料から関連する重要な専門用語を2-3個選ぶ
+2. それぞれを簡潔に解説する
+3. 「他にも知りたいことがあれば教えてね!」と促す
+4. 資料に多くの専門用語がある場合は、代表的なものを選ぶ
 
 ## パターン2: ユーザーが理解を示した場合(★重要★)
 ユーザーが以下のような発言をした場合、**必ず理解度確認の問題を出題する**:
@@ -562,15 +692,34 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 1. 学習内容に沿った選択式問題を1問出題(A、B、Cの3択)
 2. ユーザーの回答を待つ
 3. 回答後、以下の対応:
-   - **正解の場合**: 褒めて、解説を追加し、次の学習を提案
-   - **不正解の場合**: 否定せず「惜しい!」と励まし、ヒントを出して再挑戦を促す
+   - **正解の場合**: 
+     * まず「正解!」「その通り!」と明確に褒める
+     * なぜ正解なのか簡潔に解説（2-3文）
+     * 「次も頑張ろう!」と励ます
+   - **不正解の場合**: 
+     * 「惜しい!」と励ます（否定しない）
+     * 正解を明示（例: 「正解はB）だったんだ」）
+     * なぜその選択肢が正解なのか簡潔に解説
+     * 「もう一度チャレンジしてみる？」と提案
+
+## パターン3.5: 不明確な問題回答（「b」のみなど）
+ユーザーが単に「a」「b」「c」などと答えた場合:
+1. 前の問題を参照して正誤判定
+2. 質問の意図を再確認しない
+3. 直接正誤と解説を提供
+
+# 資料の活用方針
+- 資料から得られる情報は積極的に活用する
+- 完全一致しなくても、関連する内容があれば提示する
+- 「資料に記載がありません」は、本当に全く関連情報がない場合のみ
+- 資料のページ数が示されている場合は、その情報を最大限活用する
 
 # 禁止事項
-- 資料外の情報を創作する
+- 資料と全く無関係な創作をする
 - ユーザーが理解を示したのに問題を出さない
 - 間違いを責める口調
 - 連続して複数の問題を出す
-- 長すぎる説明(400文字を大幅に超える)
+- 画像が提供されたのに簡単な説明で済ませる (★重要★)
 """
 
 
@@ -636,6 +785,96 @@ def get_init_data():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/select-pdf', methods=['POST'])
+def select_pdf():
+    """学習するPDFを選択"""
+    try:
+        data = request.json
+        conversation_id = data.get('conversation_id')
+        pdf_name = data.get('pdf_name', '').strip()
+        
+        if not pdf_name:
+            return jsonify({'error': 'PDF名が必要です'}), 400
+        
+        # PDFが存在するか確認
+        pdf_list = db.get_pdf_list()
+        pdf_exists = any(pdf['filename'] == pdf_name for pdf in pdf_list)
+        
+        if not pdf_exists:
+            return jsonify({
+                'error': f'"{pdf_name}" が見つかりません',
+                'available_pdfs': [pdf['filename'] for pdf in pdf_list]
+            }), 404
+        
+        # セッションIDがない場合は新規作成
+        if not conversation_id:
+            conversation_id = str(uuid.uuid4())
+        
+        # PDFを選択
+        selected_pdfs[conversation_id] = pdf_name
+        
+        # 会話履歴を初期化（新しい科目を選んだ場合）
+        if conversation_id in conversation_history:
+            conversation_history[conversation_id] = [
+                {"role": "system", "content": BASE_SYSTEM_PROMPT}
+            ]
+        
+        print(f"📚 PDF選択: {pdf_name} (Session: {conversation_id[:8]}...)")
+        
+        return jsonify({
+            'success': True,
+            'conversation_id': conversation_id,
+            'selected_pdf': pdf_name,
+            'message': f'"{pdf_name}" を選択しました。学習を始めましょう！'
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/get-selected-pdf', methods=['POST'])
+def get_selected_pdf():
+    """現在選択中のPDFを取得"""
+    try:
+        data = request.json
+        conversation_id = data.get('conversation_id')
+        
+        if not conversation_id:
+            return jsonify({'selected_pdf': None})
+        
+        selected_pdf = selected_pdfs.get(conversation_id)
+        
+        return jsonify({
+            'conversation_id': conversation_id,
+            'selected_pdf': selected_pdf
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/clear-pdf-selection', methods=['POST'])
+def clear_pdf_selection():
+    """PDF選択をクリア（全資料から検索に戻る）"""
+    try:
+        data = request.json
+        conversation_id = data.get('conversation_id')
+        
+        if conversation_id and conversation_id in selected_pdfs:
+            del selected_pdfs[conversation_id]
+            print(f"📚 PDF選択クリア (Session: {conversation_id[:8]}...)")
+        
+        return jsonify({
+            'success': True,
+            'message': '全ての資料から検索します'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/query', methods=['POST'])
 def query():
     """ユーザークエリに応答(高度版ハイブリッド検索)"""
@@ -643,6 +882,7 @@ def query():
         data = request.json
         query_text = data.get('query', '').strip()
         conversation_id = data.get('conversation_id')
+        image_data = data.get('image')  # base64エンコードされた画像データ
         
         if not query_text:
             return jsonify({'error': 'クエリが必要です'}), 400
@@ -654,10 +894,48 @@ def query():
             conversation_id = str(uuid.uuid4())
             messages = [{"role": "system", "content": BASE_SYSTEM_PROMPT}]
         
-        # RAG検索
+        # 画像がある場合の特別処理
+        has_image = bool(image_data)
+        if has_image:
+            print(f"\n🖼️ 画像付きクエリを検出: {query_text}")
+        
+        # 問題への回答かチェック
+        if is_quiz_answer(query_text, messages):
+            print(f"\n💡 問題への回答を検出: {query_text}")
+            print("   RAG検索をスキップします")
+            
+            # 問題への回答として直接処理
+            messages.append({"role": "user", "content": query_text})
+            
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.7
+            )
+            
+            assistant_response = response.choices[0].message.content
+            messages.append({"role": "assistant", "content": assistant_response})
+            conversation_history[conversation_id] = messages
+            
+            stats = db.get_stats()
+            
+            return jsonify({
+                'response': assistant_response,
+                'conversation_id': conversation_id,
+                'stats': stats
+            })
+        
+        # 通常のRAG検索
         print(f"\n📝 ユーザークエリ: {query_text}")
+        
+        # 選択されたPDFを取得
+        selected_pdf = selected_pdfs.get(conversation_id)
+        if selected_pdf:
+            print(f"📚 選択中のPDF: {selected_pdf}")
+        
         query_embedding = create_embedding(query_text)
-        results = db.vector_search(query_embedding, top_k=10)
+        results = db.vector_search(query_embedding, top_k=10, filtered_filename=selected_pdf)
         
         # デバッグログ
         print(f"🔍 ベクトル検索結果: {len(results)}件")
@@ -675,17 +953,19 @@ def query():
             # デバッグログ
             print(f"\n🎯 高度版ハイブリッド検索結果:")
             for i, r in enumerate(results):
-                print(f"  [{i+1}] ページ{r['page']}")
+                score = r.get('hybrid_score', r['similarity'])
+                status = "✅" if score > 0.25 else "❌"
+                print(f"  [{i+1}] {status} ページ{r['page']}")
                 print(f"      ベクトル: {r['similarity']:.4f}")
                 print(f"      キーワード: {r.get('keyword_score', 0.0):.4f}")
                 print(f"      TF-IDF: {r.get('tfidf', 0.0):.4f}")
-                print(f"      統合: {r.get('hybrid_score', r['similarity']):.4f}")
+                print(f"      統合: {score:.4f}")
             
-            # 統合スコアでフィルタリング
-            relevant_results = [r for r in results if r.get('hybrid_score', r['similarity']) > 0.5]
+            # 統合スコアでフィルタリング（閾値を下げる）
+            relevant_results = [r for r in results if r.get('hybrid_score', r['similarity']) > 0.25]
             
             if relevant_results:
-                print(f"✅ 関連性の高い結果: {len(relevant_results)}件\n")
+                print(f"✅ 関連性のある結果: {len(relevant_results)}件 (統合スコア>0.25)\n")
                 context_parts = []
                 for r in relevant_results:
                     context_parts.append(
@@ -693,30 +973,98 @@ def query():
                     )
                 context = "\n\n".join(context_parts)
                 
-                user_message = f"""以下は学習資料からの抜粋です。この情報のみを使って回答してください:
+                if has_image:
+                    # 画像がある場合の特別プロンプト
+                    prompt_text = f"""画像が提供されました。以下の手順で詳細に分析して回答してください:
+
+1. **画像の内容を詳細に観察して説明する**
+2. **【画像の説明】セクションを作成し、主要なポイントを箇条書きで整理する**
+3. **【関連知識】セクションを作成し、画像の内容に関連する補足説明をする**
+
+以下は学習資料からの抜粋です。画像の内容と関連があれば活用してください:
 
 {context}
 
-質問: {query_text}"""
+質問: {query_text}
+
+※ 画像のテキストは全て読み取り、構造化して詳細に説明してください。"""
+                else:
+                    prompt_text = f"""以下は学習資料からの抜粋です。この情報を活用して回答してください:
+
+{context}
+
+質問: {query_text}
+
+※ 資料から得られる情報を最大限活用してください。抽象的な質問の場合は、資料にある関連する専門用語や概念を整理して説明してください。"""
             else:
-                print("⚠️ 関連性の高い結果なし(統合スコア<0.5)\n")
-                user_message = f"質問: {query_text}\n\n(注意: 資料から関連情報が見つかりませんでした。資料に基づいて回答できない場合はその旨を伝えてください)"
+                print("⚠️ 関連性のある結果なし(統合スコア<0.25)\n")
+                if has_image:
+                    prompt_text = f"""画像が提供されました。以下の手順で詳細に分析して回答してください:
+
+1. **画像の内容を詳細に観察して説明する**
+2. **【画像の説明】セクションを作成し、主要なポイントを箇条書きで整理する**
+3. **【関連知識】セクションを作成し、画像の内容に関連する補足説明をする**
+
+質問: {query_text}
+
+(注意: 資料から十分に関連する情報が見つかりませんでしたが、画像の内容を詳細に分析して説明してください)"""
+                else:
+                    prompt_text = f"質問: {query_text}\n\n(注意: 資料から十分に関連する情報が見つかりませんでした。資料に基づいて回答できる範囲で答えるか、資料に記載がないことを伝えてください)"
         else:
             print("⚠️ 検索結果なし\n")
-            user_message = f"質問: {query_text}\n\n(注意: 資料から情報が見つかりませんでした。資料に基づいて回答できない場合はその旨を伝えてください)"
+            if has_image:
+                prompt_text = f"""画像が提供されました。以下の手順で詳細に分析して回答してください:
+
+1. **画像の内容を詳細に観察して説明する**
+2. **【画像の説明】セクションを作成し、主要なポイントを箇条書きで整理する**
+3. **【関連知識】セクションを作成し、画像の内容に関連する補足説明をする**
+
+質問: {query_text}
+
+(注意: 資料から情報が見つかりませんでしたが、画像の内容を詳細に分析して説明してください)"""
+            else:
+                prompt_text = f"質問: {query_text}\n\n(注意: 資料から情報が見つかりませんでした。資料に基づいて回答できない場合は、資料の登録状況を確認するよう提案してください)"
         
-        messages.append({"role": "user", "content": user_message})
+        # メッセージの構築（画像がある場合は配列形式）
+        if has_image:
+            user_message = {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": prompt_text
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{image_data}"
+                        }
+                    }
+                ]
+            }
+        else:
+            user_message = {"role": "user", "content": prompt_text}
         
-        # GPT-4 APIを呼び出し
+        messages.append(user_message)
+        
+        # GPT-4 APIを呼び出し（画像がある場合はmax_tokensを増やす）
+        max_tokens = 3000 if has_image else 2000
+        
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            max_tokens=2000,
+            max_tokens=max_tokens,
             temperature=0.7
         )
         
         assistant_response = response.choices[0].message.content
-        messages.append({"role": "assistant", "content": assistant_response})
+        
+        # 会話履歴に追加（画像データは保存せず、テキストのみ）
+        if has_image:
+            # 画像付きメッセージの場合は、テキスト部分のみを保存
+            messages.append({"role": "assistant", "content": assistant_response})
+        else:
+            messages.append({"role": "assistant", "content": assistant_response})
         
         # 会話履歴を保存
         conversation_history[conversation_id] = messages
