@@ -707,6 +707,97 @@ BASE_SYSTEM_PROMPT = """# 前提条件
 1. 前の問題を参照して正誤判定
 2. 質問の意図を再確認しない
 3. 直接正誤と解説を提供
+4. 一つ前の質問が見つかるまで遡る
+
+## パターン4: 過去問を求められた場合
+1. ユーザーの指定に基づき、過去問形式の模擬問題を出題
+2. 出題形式・文体・難易度・分野構成を忠実に再現
+"出題・解説ルール": {
+      "出題単位": "一問ずつ行うこと。",
+      "解説要件": [
+        "回答や解説では必ず用語の意味や背景も説明すること。",
+        "解説文字数は200文字以内。",
+        "科目名を必ず明記すること。",
+        "出典を必ず明記すること（例：2024年前期 マルチメディア検定ベーシック）。"
+      ],
+      "問題出典": {
+        "使用可能ファイル": [
+          "2024年前期 マルチメディア検定ベーシック問題・解答",
+          "2024年後期 マルチメディア検定ベーシック問題・解答",
+          "2025年前期 マルチメディア検定ベーシック問題・解答",
+          "2025年後期 マルチメディア検定ベーシック問題・解答"
+        ],
+
+"モード設定": {
+      "🧩 出題モード": "年度・分野を指定して過去問をランダム出題。",
+      "💡 解説モード": "問題番号を指定して正答と解説を提示。",
+      "📝 復習モード": "間違えた問題を再出題し、要点を強調して解説。",
+      "📘 過去問モード": {
+        "概要": "実際の過去問形式に準拠した模擬問題をオリジナルで生成する。",
+        "出題基準": {
+          "参照範囲": "2024〜2025年度のマルチメディア検定ベーシック過去問（第1問〈共通問題〉および第34〜42問）",
+          "条件": [
+            "出題形式・文体・難易度・分野構成を忠実に再現。",
+            "出題手順": [
+          "① 問題のみを表示する（ユーザーが回答するまで正解は非表示）。",
+          "② ユーザーが回答（ア〜エなど）を入力したら、正誤判定と解説を提示する。"
+            "問題文・数値・事例・図は必ずオリジナルにする。"
+          ]
+        },
+        "出題構成": {
+          "① 共通問題": {
+            "内容": "知的財産権・著作権をテーマとする空欄補充・会話文形式・複数選択（ア〜キ）を含む小問。",
+            "形式": "高校〜大学初年級レベルの理解型問題。"
+          },
+          "② 分野別問題": {
+            "範囲": [
+              "画像（画素数、ビット数、解像度、明度・彩度・色相）",
+              "色の知覚（対比・同化・錯視など）",
+              "音声のディジタル化（標本化・量子化・符号化）",
+              "動画・圧縮・データ量",
+              "ネットワーク／Web／マルチメディアの特徴",
+              "情報モラル／情報リテラシ"
+            ],
+            "要求": "分野をバランスよく含めること。"
+          }
+        },
+        "問題形式": {
+          "構造": [
+            "「以下は〜に関する問題である」から始める。",
+            "小問形式（a〜d）で構成。",
+            "選択肢はア〜エ（必要に応じてオ〜キ）。",
+            "同一解答群から同じ記号を重複使用しない形式も採用可能。"
+          ],
+          "出力フォーマット": {
+            "例": "――――――――――\n第◯問\n問題文\n\na．（設問）\n【解答群】\nア．\nイ．\nウ．\nエ．\n\nb．（設問）\n【解答群】\nア．\nイ．\nウ．\nエ．\n――――――――――\n【正解】\n【簡潔な解説（試験対策向け・1〜2行）】"
+          }
+        },
+        "出題方針": {
+          "レベル": "高校〜大学初年級レベル。",
+          "特徴": "暗記ではなく、理解していないと解けない応用型問題。",
+          "目的": "実戦形式での理解確認と出題傾向の体得。"
+        }
+      }
+    },
+    出題例は以下の通りです
+    "出力例": {
+      "過去問モード例": {
+        "第": "1問",
+        "問題文": "以下は著作権に関する会話文である。空欄に当てはまる語句を選択肢から選べ。",
+        "a": {
+          "設問": "A：「著作者が作品を他人に許可なく使用されないようにする権利を何という？」",
+          "解答群": ["ア．特許権", "イ．著作権", "ウ．商標権", "エ．意匠権"]
+        },
+        "b": {
+          "設問": "B：「その権利のうち、作者の人格を保護する権利を何という？」",
+          "解答群": ["ア．著作権", "イ．著作財産権", "ウ．著作者人格権", "エ．複製権"]
+        },
+        "正解": { "a": "イ", "b": "ウ" },
+        "解説": "著作権には財産権と人格権があり、人格権は作者の名誉や意図を守る権利だよ。"
+      }
+    }
+  }
+}
 
 # 資料の活用方針
 - 資料から得られる情報は積極的に活用する
@@ -884,8 +975,8 @@ def query():
         conversation_id = data.get('conversation_id')
         image_data = data.get('image')  # base64エンコードされた画像データ
         
-        if not query_text:
-            return jsonify({'error': 'クエリが必要です'}), 400
+        if not query_text and not image_data:
+            return jsonify({'error': 'クエリまたは画像が必要です'}), 400
         
         # 会話履歴の取得
         if conversation_id and conversation_id in conversation_history:
@@ -894,17 +985,33 @@ def query():
             conversation_id = str(uuid.uuid4())
             messages = [{"role": "system", "content": BASE_SYSTEM_PROMPT}]
         
-        # 画像がある場合の特別処理
+        # 画像データの正規化
         has_image = bool(image_data)
         if has_image:
-            print(f"\n🖼️ 画像付きクエリを検出: {query_text}")
+            print(f"\n🖼️ 画像付きクエリを検出: {query_text or '(テキストなし)'}")
+            
+            # Base64形式を確認・修正
+            if image_data.startswith('data:image'):
+                # data:image/png;base64,xxxxx の形式（正しい）
+                print(f"✅ 画像形式OK: {image_data[:50]}...")
+            else:
+                # プレフィックスがない場合は追加
+                print("⚠️ 画像にdata:プレフィックスがありません。追加します。")
+                # 画像タイプを判定（デフォルトはpng）
+                if image_data.startswith('/9j/'):
+                    image_data = f"data:image/jpeg;base64,{image_data}"
+                elif image_data.startswith('iVBOR'):
+                    image_data = f"data:image/png;base64,{image_data}"
+                else:
+                    # その他の場合はpngとして扱う
+                    image_data = f"data:image/png;base64,{image_data}"
+                print(f"✅ 修正後: {image_data[:50]}...")
         
-        # 問題への回答かチェック
-        if is_quiz_answer(query_text, messages):
+        # 問題への回答かチェック（画像がない場合のみ）
+        if not has_image and is_quiz_answer(query_text, messages):
             print(f"\n💡 問題への回答を検出: {query_text}")
             print("   RAG検索をスキップします")
             
-            # 問題への回答として直接処理
             messages.append({"role": "user", "content": query_text})
             
             response = client.chat.completions.create(
@@ -926,56 +1033,67 @@ def query():
                 'stats': stats
             })
         
-        # 通常のRAG検索
-        print(f"\n📝 ユーザークエリ: {query_text}")
+        # 通常のRAG検索（画像がある場合も実行）
+        print(f"\n📝 ユーザークエリ: {query_text or '(画像のみ)'}")
         
         # 選択されたPDFを取得
         selected_pdf = selected_pdfs.get(conversation_id)
         if selected_pdf:
             print(f"📚 選択中のPDF: {selected_pdf}")
         
-        query_embedding = create_embedding(query_text)
-        results = db.vector_search(query_embedding, top_k=10, filtered_filename=selected_pdf)
-        
-        # デバッグログ
-        print(f"🔍 ベクトル検索結果: {len(results)}件")
-        for i, r in enumerate(results[:5]):
-            print(f"  [{i+1}] ページ{r['page']}, 類似度: {r['similarity']:.4f}")
-        
-        if results:
-            # 会話履歴から文脈を抽出
-            context = extract_context_from_history(messages, max_turns=2)
+        # クエリテキストがある場合のみRAG検索
+        if query_text:
+            query_embedding = create_embedding(query_text)
+            results = db.vector_search(query_embedding, top_k=10, filtered_filename=selected_pdf)
             
-            # 高度版ハイブリッド検索を適用（文脈考慮）
-            results = advanced_hybrid_search(query_text, results, alpha=0.7, context=context)
-            results = results[:5]
+            print(f"🔍 ベクトル検索結果: {len(results)}件")
+            for i, r in enumerate(results[:5]):
+                print(f"  [{i+1}] ページ{r['page']}, 類似度: {r['similarity']:.4f}")
             
-            # デバッグログ
-            print(f"\n🎯 高度版ハイブリッド検索結果:")
-            for i, r in enumerate(results):
-                score = r.get('hybrid_score', r['similarity'])
-                status = "✅" if score > 0.25 else "❌"
-                print(f"  [{i+1}] {status} ページ{r['page']}")
-                print(f"      ベクトル: {r['similarity']:.4f}")
-                print(f"      キーワード: {r.get('keyword_score', 0.0):.4f}")
-                print(f"      TF-IDF: {r.get('tfidf', 0.0):.4f}")
-                print(f"      統合: {score:.4f}")
-            
-            # 統合スコアでフィルタリング（閾値を下げる）
-            relevant_results = [r for r in results if r.get('hybrid_score', r['similarity']) > 0.25]
-            
-            if relevant_results:
-                print(f"✅ 関連性のある結果: {len(relevant_results)}件 (統合スコア>0.25)\n")
-                context_parts = []
-                for r in relevant_results:
-                    context_parts.append(
-                        f"【{r['filename']} - ページ{r['page']}】\n{r['text']}"
-                    )
-                context = "\n\n".join(context_parts)
+            if results:
+                # 会話履歴から文脈を抽出
+                context = extract_context_from_history(messages, max_turns=2)
                 
-                if has_image:
-                    # 画像がある場合の特別プロンプト
-                    prompt_text = f"""画像が提供されました。以下の手順で詳細に分析して回答してください:
+                # 高度版ハイブリッド検索を適用
+                results = advanced_hybrid_search(query_text, results, alpha=0.7, context=context)
+                results = results[:5]
+                
+                print(f"\n🎯 高度版ハイブリッド検索結果:")
+                for i, r in enumerate(results):
+                    score = r.get('hybrid_score', r['similarity'])
+                    status = "✅" if score > 0.25 else "❌"
+                    print(f"  [{i+1}] {status} ページ{r['page']}")
+                    print(f"      ベクトル: {r['similarity']:.4f}")
+                    print(f"      キーワード: {r.get('keyword_score', 0.0):.4f}")
+                    print(f"      TF-IDF: {r.get('tfidf', 0.0):.4f}")
+                    print(f"      統合: {score:.4f}")
+                
+                # 統合スコアでフィルタリング
+                relevant_results = [r for r in results if r.get('hybrid_score', r['similarity']) > 0.25]
+                
+                if relevant_results:
+                    print(f"✅ 関連性のある結果: {len(relevant_results)}件 (統合スコア>0.25)\n")
+                    context_parts = []
+                    for r in relevant_results:
+                        context_parts.append(
+                            f"【{r['filename']} - ページ{r['page']}】\n{r['text']}"
+                        )
+                    rag_context = "\n\n".join(context_parts)
+                else:
+                    print("⚠️ 関連性のある結果なし(統合スコア<0.25)\n")
+                    rag_context = None
+            else:
+                print("⚠️ 検索結果なし\n")
+                rag_context = None
+        else:
+            # 画像のみの場合はRAG検索をスキップ
+            print("📷 画像のみのクエリ - RAG検索をスキップ")
+            rag_context = None
+        
+        # プロンプト構築
+        if has_image:
+            if rag_context:
+                prompt_text = f"""画像が提供されました。以下の手順で詳細に分析して回答してください:
 
 1. **画像の内容を詳細に観察して説明する**
 2. **【画像の説明】セクションを作成し、主要なポイントを箇条書きで整理する**
@@ -983,49 +1101,34 @@ def query():
 
 以下は学習資料からの抜粋です。画像の内容と関連があれば活用してください:
 
-{context}
+{rag_context}
 
-質問: {query_text}
+{f'質問: {query_text}' if query_text else ''}
 
 ※ 画像のテキストは全て読み取り、構造化して詳細に説明してください。"""
-                else:
-                    prompt_text = f"""以下は学習資料からの抜粋です。この情報を活用して回答してください:
-
-{context}
-
-質問: {query_text}
-
-※ 資料から得られる情報を最大限活用してください。抽象的な質問の場合は、資料にある関連する専門用語や概念を整理して説明してください。"""
             else:
-                print("⚠️ 関連性のある結果なし(統合スコア<0.25)\n")
-                if has_image:
-                    prompt_text = f"""画像が提供されました。以下の手順で詳細に分析して回答してください:
-
-1. **画像の内容を詳細に観察して説明する**
-2. **【画像の説明】セクションを作成し、主要なポイントを箇条書きで整理する**
-3. **【関連知識】セクションを作成し、画像の内容に関連する補足説明をする**
-
-質問: {query_text}
-
-(注意: 資料から十分に関連する情報が見つかりませんでしたが、画像の内容を詳細に分析して説明してください)"""
-                else:
-                    prompt_text = f"質問: {query_text}\n\n(注意: 資料から十分に関連する情報が見つかりませんでした。資料に基づいて回答できる範囲で答えるか、資料に記載がないことを伝えてください)"
-        else:
-            print("⚠️ 検索結果なし\n")
-            if has_image:
                 prompt_text = f"""画像が提供されました。以下の手順で詳細に分析して回答してください:
 
 1. **画像の内容を詳細に観察して説明する**
 2. **【画像の説明】セクションを作成し、主要なポイントを箇条書きで整理する**
 3. **【関連知識】セクションを作成し、画像の内容に関連する補足説明をする**
 
+{f'質問: {query_text}' if query_text else ''}
+
+(注意: 資料から十分に関連する情報が見つかりませんでしたが、画像の内容を詳細に分析して説明してください)"""
+        else:
+            if rag_context:
+                prompt_text = f"""以下は学習資料からの抜粋です。この情報を活用して回答してください:
+
+{rag_context}
+
 質問: {query_text}
 
-(注意: 資料から情報が見つかりませんでしたが、画像の内容を詳細に分析して説明してください)"""
+※ 資料から得られる情報を最大限活用してください。"""
             else:
                 prompt_text = f"質問: {query_text}\n\n(注意: 資料から情報が見つかりませんでした。資料に基づいて回答できない場合は、資料の登録状況を確認するよう提案してください)"
         
-        # メッセージの構築（画像がある場合は配列形式）
+        # メッセージの構築
         if has_image:
             user_message = {
                 "role": "user",
@@ -1037,7 +1140,8 @@ def query():
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/jpeg;base64,{image_data}"
+                            "url": image_data,  # 既に正規化済み
+                            "detail": "high"  # 高解像度で分析
                         }
                     }
                 ]
@@ -1047,24 +1151,34 @@ def query():
         
         messages.append(user_message)
         
-        # GPT-4 APIを呼び出し（画像がある場合はmax_tokensを増やす）
+        # GPT-4 APIを呼び出し
         max_tokens = 3000 if has_image else 2000
         
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=0.7
-        )
+        print(f"🤖 GPT-4{'Vision' if has_image else ''} 呼び出し中...")
         
-        assistant_response = response.choices[0].message.content
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.7
+            )
+            
+            assistant_response = response.choices[0].message.content
+            print(f"✅ GPT-4 応答: {len(assistant_response)}文字")
+            
+        except Exception as api_error:
+            print(f"❌ OpenAI APIエラー: {api_error}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': f'AI応答エラー: {str(api_error)}'}), 500
         
-        # 会話履歴に追加（画像データは保存せず、テキストのみ）
+        # 会話履歴に追加（画像データは保存しない）
         if has_image:
-            # 画像付きメッセージの場合は、テキスト部分のみを保存
-            messages.append({"role": "assistant", "content": assistant_response})
-        else:
-            messages.append({"role": "assistant", "content": assistant_response})
+            # テキスト部分のみを保存
+            messages[-1] = {"role": "user", "content": query_text or "画像について質問"}
+        
+        messages.append({"role": "assistant", "content": assistant_response})
         
         # 会話履歴を保存
         conversation_history[conversation_id] = messages

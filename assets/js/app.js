@@ -164,7 +164,18 @@ function handleImageSelect(event) {
     const reader = new FileReader();
     reader.onload = (e) => {
         currentImage = e.target.result;
+        
+        // デバッグ：Base64形式を確認
         console.log('✅ 画像読み込み完了');
+        console.log('📊 Base64先頭:', currentImage.substring(0, 100));
+        console.log('📊 Base64長さ:', currentImage.length);
+        
+        // プレフィックスを確認
+        if (currentImage.startsWith('data:image')) {
+            console.log('✅ 正しいBase64形式');
+        } else {
+            console.warn('⚠️ Base64プレフィックスなし');
+        }
         
         const imagePreview = document.getElementById('imagePreview');
         const imagePreviewContainer = document.getElementById('imagePreviewContainer');
@@ -176,15 +187,24 @@ function handleImageSelect(event) {
 }
 
 function clearImage() {
+    console.log('🗑️ clearImage実行');
+    
     currentImage = null;
     
     const imageInput = document.getElementById('imageInput');
     const imagePreviewContainer = document.getElementById('imagePreviewContainer');
     
-    if (imageInput) imageInput.value = '';
-    if (imagePreviewContainer) imagePreviewContainer.style.display = 'none';
+    if (imageInput) {
+        imageInput.value = '';
+        console.log('  ✓ imageInput クリア');
+    }
     
-    console.log('🗑️ 画像をクリアしました');
+    if (imagePreviewContainer) {
+        imagePreviewContainer.style.display = 'none';
+        console.log('  ✓ プレビュー非表示');
+    }
+    
+    console.log('✅ 画像クリア完了');
 }
 
 // ========================================
@@ -212,14 +232,20 @@ async function sendQuestion() {
         welcomeScreen.style.display = 'none';
     }
     
-    // ユーザーメッセージを表示
+    // ★ 重要：画像を先に保存してクリア（重複防止）
+    const imageToSend = currentImage;
+    if (imageToSend) {
+        clearImage();  // 即座にクリア
+    }
+    
+    // メッセージを先に追加
     if (message) {
         addMessage(message, true);
     }
     
-    // 画像を表示
-    if (currentImage) {
-        addImageMessage(currentImage, true);
+    // 画像を追加（一度だけ）
+    if (imageToSend) {
+        addImageMessage(imageToSend, true);
     }
     
     // 入力をクリア
@@ -235,7 +261,7 @@ async function sendQuestion() {
             body: JSON.stringify({
                 query: message || '',
                 conversation_id: conversationId,
-                image: currentImage
+                image: imageToSend
             })
         });
         
@@ -245,12 +271,6 @@ async function sendQuestion() {
             addMessage(data.response, false);
             conversationId = data.conversation_id;
             
-            // 画像をクリア
-            if (currentImage) {
-                clearImage();
-            }
-            
-            // 統計情報を更新
             if (data.stats) {
                 updateStats(data.stats);
             }
@@ -265,7 +285,6 @@ async function sendQuestion() {
         sendButton.innerHTML = originalHTML;
     }
 }
-
 // ========================================
 // メッセージ表示
 // ========================================
@@ -311,8 +330,18 @@ function addImageMessage(imageSrc, isUser) {
     const chatContainer = document.getElementById('chatContainer');
     if (!chatContainer) return;
     
+    // ウェルカムスクリーンを非表示
     const welcomeScreen = chatContainer.querySelector('.welcome-screen');
     if (welcomeScreen) welcomeScreen.remove();
+    
+    // ★ 重複チェック：同じ画像が既に追加されているか確認
+    const existingImages = chatContainer.querySelectorAll('.chat-image');
+    for (let img of existingImages) {
+        if (img.src === imageSrc) {
+            console.log('⚠️ 重複画像を検出、追加をスキップ');
+            return;
+        }
+    }
     
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
@@ -339,6 +368,8 @@ function addImageMessage(imageSrc, isUser) {
     
     chatContainer.appendChild(messageDiv);
     scrollToBottom();
+    
+    console.log('✅ 画像メッセージを追加しました');
 }
 
 function scrollToBottom() {
